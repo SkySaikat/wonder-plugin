@@ -142,12 +142,85 @@ class WAB_Security {
         return array_unique( $ips );
     }
 
+    /**
+     * Is this address safe to fetch?
+     *
+     * filter_var()'s NO_PRIV_RANGE|NO_RES_RANGE alone is NOT sufficient. Two gaps
+     * that matter for cloud-hosted WordPress:
+     *
+     *   1. IPv4-mapped IPv6. '::ffff:169.254.169.254' passes as a valid PUBLIC
+     *      IPv6 address, yet routes to the link-local metadata endpoint that hands
+     *      out cloud IAM credentials. The mapped form must be unwrapped and
+     *      re-checked as IPv4.
+     *
+     *   2. CGNAT 100.64.0.0/10 is neither "private" nor "reserved" by filter_var's
+     *      definition, but is routable inside many hosting networks.
+     *
+     * Also blocked explicitly: 0.0.0.0/8 (this-network), IPv6 unique-local fc00::/7,
+     * and IPv6 link-local fe80::/10, since coverage of those varies by PHP build.
+     */
     private static function is_public_ip( $ip ) {
-        return (bool) filter_var(
-            $ip,
-            FILTER_VALIDATE_IP,
-            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-        );
+        $ip = trim( (string) $ip );
+        if ( $ip === '' ) return false;
+
+        // --- Unwrap IPv4-mapped / IPv4-compatible IPv6 -----------------
+        // Forms: ::ffff:1.2.3.4  ::ffff:0102:0304  ::1.2.3.4
+        if ( strpos( $ip, ':' ) !== false ) {
+            $lower = strtolower( $ip );
+
+            if ( preg_match( '/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/', $lower, $m ) ) {
+                $ip = $m[1]; // Re-check as IPv4 below.
+            } elseif ( preg_match( '/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/', $lower, $m ) ) {
+                // Hex-encoded mapped form.
+                $a = hexdec( $m[1] );
+                $b = hexdec( $m[2] );
+                $ip = sprintf( '%d.%d.%d.%d', ( $a >> 8 ) & 0xFF, $a & 0xFF, ( $b >> 8 ) & 0xFF, $b & 0xFF );
+            } elseif ( preg_match( '/^::(\d{1,3}(?:\.\d{1,3}){3})$/', $lower, $m ) ) {
+                $ip = $m[1];
+            }
+        }
+
+        // --- Baseline filter -------------------------------------------
+        if ( ! filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) ) {
+            return false;
+        }
+
+        // --- Explicit blocks the baseline misses -----------------------
+        if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
+            $long = ip2long( $ip );
+            if ( $long === false ) return false;
+
+            $blocked = array(
+                array( '100.64.0.0',  10 ), // CGNAT — routable inside many hosts.
+                array( '0.0.0.0',      8 ), // "This network".
+                array( '169.254.0.0', 16 ), // Link-local / cloud metadata (belt and braces).
+                array( '192.0.0.0',   24 ), // IETF protocol assignments.
+            );
+
+            foreach ( $blocked as $range ) {
+                $base = ip2long( $range[0] );
+                $mask = -1 << ( 32 - $range[1] );
+                if ( ( $long & $mask ) === ( $base & $mask ) ) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // --- IPv6 -------------------------------------------------------
+        $packed = @inet_pton( $ip );
+        if ( $packed === false ) return false;
+
+        $first = ord( $packed[0] );
+
+        // fc00::/7 unique-local
+        if ( ( $first & 0xFE ) === 0xFC ) return false;
+
+        // fe80::/10 link-local
+        if ( $first === 0xFE && ( ord( $packed[1] ) & 0xC0 ) === 0x80 ) return false;
+
+        return true;
     }
 
     /**

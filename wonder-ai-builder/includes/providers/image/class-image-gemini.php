@@ -19,8 +19,9 @@ class WAB_Image_Gemini implements WAB_Image_Provider_Interface {
     public function get_key_option() { return self::KEY_OPTION; }
 
     public function is_configured() {
-        return ( defined( 'WAB_GEMINI_API_KEY' ) && WAB_GEMINI_API_KEY )
-            || ! empty( get_option( self::KEY_OPTION, '' ) );
+        // Funnels through api_key() so constant-vs-option precedence is defined in
+        // exactly one place per provider.
+        return $this->api_key() !== '';
     }
 
     private function api_key() {
@@ -56,7 +57,13 @@ class WAB_Image_Gemini implements WAB_Image_Provider_Interface {
         }
 
         $models = $this->get_models();
-        $model  = $args['model'] ?? get_option( 'wab_gemini_image_model', 'gemini-2.5-flash-image' );
+
+        // Empty-string check, not ??: an unset option arrives as '' rather than null,
+        // so ?? would accept the empty value instead of falling through.
+        $model = ! empty( $args['model'] )
+            ? (string) $args['model']
+            : (string) get_option( 'wab_gemini_image_model', 'gemini-2.5-flash-image' );
+
         if ( ! isset( $models[ $model ] ) ) $model = 'gemini-2.5-flash-image';
 
         $prompt = mb_substr( trim( wp_strip_all_tags( (string) $prompt ) ), 0, 1500 );

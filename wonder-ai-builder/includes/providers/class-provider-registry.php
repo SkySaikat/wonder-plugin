@@ -52,6 +52,38 @@ class WAB_Provider_Registry {
     }
 
     /**
+     * The configured model for an image provider.
+     *
+     * Single source of truth for the option name. Callers previously derived it as
+     * 'wab_' . $id . '_model', which is right for fal ('wab_fal_model') but wrong for
+     * Gemini images, whose option is 'wab_gemini_image_model' — the text and image
+     * Gemini providers share an ID but not a model setting. That mismatch happened to
+     * work only because an empty model falls through to a default, which would have
+     * silently ignored the operator's choice.
+     *
+     * @param WAB_Image_Provider_Interface $provider
+     * @return string Model ID, or '' to let the provider pick its default.
+     */
+    public static function image_model( $provider ) {
+        $map = array(
+            'fal'    => 'wab_fal_model',
+            'gemini' => 'wab_gemini_image_model',
+            'none'   => '',
+        );
+
+        $id     = $provider->get_id();
+        $option = $map[ $id ] ?? ( 'wab_' . $id . '_model' );
+
+        if ( $option === '' ) return '';
+
+        $model  = (string) get_option( $option, '' );
+        $models = $provider->get_models();
+
+        // Guard against a stale option naming a model that no longer exists.
+        return isset( $models[ $model ] ) ? $model : '';
+    }
+
+    /**
      * Authoritative per-item cost estimate for the CURRENT configuration.
      * Used by the budget gate before a batch starts.
      */
@@ -72,7 +104,7 @@ class WAB_Provider_Registry {
 
         if ( $source !== 'library_only' && $source !== 'none' ) {
             $img   = self::image();
-            $model = get_option( 'wab_' . $img->get_id() . '_model', '' );
+            $model = self::image_model( $img );
             $image_cost = (float) $img->estimate_cost(
                 $model,
                 (int) get_option( 'wab_image_width', 1280 ),

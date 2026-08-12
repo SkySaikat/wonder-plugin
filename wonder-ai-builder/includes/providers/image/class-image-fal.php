@@ -39,7 +39,23 @@ class WAB_Image_Fal implements WAB_Image_Provider_Interface {
     public function get_key_option() { return self::KEY_OPTION; }
 
     public function is_configured() {
-        return ! empty( get_option( self::KEY_OPTION, '' ) );
+        return $this->api_key() !== '';
+    }
+
+    /**
+     * Resolve the key, constant first.
+     *
+     * Every other provider does this; fal originally did not, which silently broke
+     * the documented multi-site workflow: an operator who defined WAB_FAL_API_KEY in
+     * wp-config.php (the recommended approach at ~200 sites, so the secret never
+     * enters the database) would find fal reporting "not configured", and every
+     * image would quietly fall back to library-only with no error surfaced.
+     */
+    private function api_key() {
+        if ( defined( 'WAB_FAL_API_KEY' ) && WAB_FAL_API_KEY ) {
+            return (string) WAB_FAL_API_KEY;
+        }
+        return (string) get_option( self::KEY_OPTION, '' );
     }
 
     /**
@@ -116,7 +132,7 @@ class WAB_Image_Fal implements WAB_Image_Provider_Interface {
      * @inheritDoc
      */
     public function generate( $prompt, array $args = array() ) {
-        $api_key = (string) get_option( self::KEY_OPTION, '' );
+        $api_key = $this->api_key();
         if ( $api_key === '' ) {
             return new WP_Error( 'wab_fal_no_key', __( 'fal.ai API key is not configured.', 'wonder-ai-builder' ) );
         }
@@ -129,7 +145,14 @@ class WAB_Image_Fal implements WAB_Image_Provider_Interface {
         $prompt = mb_substr( $prompt, 0, 1500 );
 
         $models = $this->get_models();
-        $model  = isset( $args['model'] ) ? (string) $args['model'] : 'fal-ai/flux/schnell';
+
+        // Caller's choice, else the stored setting, else the cheapest good model.
+        // Note the empty-string check: an unset option arrives as '' rather than
+        // null, so ?? alone would not fall through.
+        $model = ! empty( $args['model'] )
+            ? (string) $args['model']
+            : (string) get_option( 'wab_fal_model', 'fal-ai/flux/schnell' );
+
         if ( ! isset( $models[ $model ] ) ) {
             $model = 'fal-ai/flux/schnell';
         }

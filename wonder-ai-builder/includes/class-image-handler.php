@@ -81,7 +81,7 @@ class WAB_Image_Handler {
         }
 
         $prompt = self::build_image_prompt( $row, $content );
-        $model  = get_option( 'wab_' . $provider->get_id() . '_model', '' );
+        $model  = WAB_Provider_Registry::image_model( $provider );
 
         $result = $provider->generate( $prompt, array(
             'model'  => $model,
