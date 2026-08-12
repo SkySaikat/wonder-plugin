@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wonder AI Builder — Operator Guide</title>
+<style>
+  :root{
+    --ink:#16191d; --ink-2:#3d444d; --muted:#6b7280; --line:#e4e7eb;
+    --bg:#fff; --bg-2:#f7f8fa; --accent:#1f6feb; --ok:#0a7d43; --warn:#a4650a; --danger:#b3261e;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--ink:#e6e8eb;--ink-2:#b6bcc4;--muted:#8b939e;--line:#2b3138;--bg:#14171a;--bg-2:#1c2024;
+          --accent:#589dff;--ok:#3fb950;--warn:#d29922;--danger:#f85149;}
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{display:grid;grid-template-columns:250px minmax(0,1fr);gap:56px;
+        max-width:1180px;margin:0 auto;padding:48px 28px 120px}
+  @media (max-width:900px){.wrap{grid-template-columns:1fr;gap:28px;padding:28px 18px 80px}
+    nav{position:static!important;max-height:none!important}}
+
+  /* Nav */
+  nav{position:sticky;top:32px;align-self:start;max-height:calc(100vh - 64px);overflow-y:auto}
+  nav .brand{font-weight:700;font-size:15px;letter-spacing:-.01em;margin-bottom:4px}
+  nav .ver{font:11px/1 var(--mono);color:var(--muted);margin-bottom:20px}
+  nav a{display:block;padding:5px 0;color:var(--ink-2);text-decoration:none;font-size:13.5px;
+        border-left:2px solid transparent;padding-left:12px;margin-left:-14px}
+  nav a:hover{color:var(--accent);border-left-color:var(--line)}
+  nav .sec{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+           font-weight:700;margin:18px 0 6px;padding-left:12px}
+
+  /* Type */
+  h1{font-size:34px;line-height:1.15;letter-spacing:-.022em;margin:0 0 10px}
+  h2{font-size:23px;letter-spacing:-.016em;margin:52px 0 14px;padding-top:20px;border-top:1px solid var(--line)}
+  h2:first-of-type{border-top:0;padding-top:0;margin-top:34px}
+  h3{font-size:16.5px;margin:30px 0 8px;letter-spacing:-.008em}
+  .lede{font-size:18.5px;color:var(--ink-2);margin:0 0 8px;line-height:1.55}
+  p{margin:0 0 14px}
+  ul,ol{margin:0 0 14px;padding-left:22px}
+  li{margin-bottom:6px}
+  code{font:13.5px/1.5 var(--mono);background:var(--bg-2);border:1px solid var(--line);
+       border-radius:4px;padding:1.5px 5px}
+  pre{background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:14px 16px;
+      overflow-x:auto;margin:0 0 16px}
+  pre code{background:none;border:0;padding:0;font-size:13px;line-height:1.6}
+  a{color:var(--accent)}
+
+  /* Steps */
+  .step{display:grid;grid-template-columns:34px 1fr;gap:16px;margin-bottom:26px;align-items:start}
+  .step-n{width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;
+          display:grid;place-items:center;font-weight:700;font-size:14px}
+  .step h3{margin:5px 0 6px}
+
+  /* Callouts */
+  .note{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;
+        padding:13px 16px;margin:0 0 18px;background:var(--bg-2)}
+  .note.warn{border-left-color:var(--warn)}
+  .note.danger{border-left-color:var(--danger)}
+  .note.ok{border-left-color:var(--ok)}
+  .note strong:first-child{display:block;margin-bottom:3px}
+  .note p:last-child{margin-bottom:0}
+
+  /* Table */
+  table{width:100%;border-collapse:collapse;margin:0 0 18px;font-size:14.5px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+     border-bottom:1.5px solid var(--line);padding:8px 10px;font-weight:700}
+  td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  tbody tr:hover{background:var(--bg-2)}
+  .num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:13px}
+  .best{color:var(--ok);font-weight:700}
+  .bad{color:var(--danger)}
+
+  .pill{display:inline-block;font:11px/1 var(--mono);padding:3.5px 7px;border-radius:20px;
+        background:var(--bg-2);border:1px solid var(--line);color:var(--ink-2)}
+  .pill.ok{color:var(--ok);border-color:currentColor}
+  .pill.no{color:var(--muted)}
+
+  .flow{font:12.5px/1.75 var(--mono);background:var(--bg-2);border:1px solid var(--line);
+        border-radius:9px;padding:16px;overflow-x:auto;white-space:pre;margin:0 0 18px}
+  footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);
+         font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <div class="brand">Wonder AI Builder</div>
+  <div class="ver">v2.0.0 · operator guide</div>
+
+  <div class="sec">Setup</div>
+  <a href="#what">What it does</a>
+  <a href="#install">1. Install</a>
+  <a href="#cron">2. Server cron</a>
+  <a href="#keys">3. API keys</a>
+  <a href="#config">4. Configure</a>
+
+  <div class="sec">Using it</div>
+  <a href="#sheet">Spreadsheet format</a>
+  <a href="#schema">The Schema column</a>
+  <a href="#run">Running a batch</a>
+  <a href="#modes">Standard vs Economy</a>
+  <a href="#images">How images are chosen</a>
+  <a href="#depth">Content depth (A-D)</a>
+
+  <div class="sec">Reference</div>
+  <a href="#cost">Cost reference</a>
+  <a href="#cli">Command line</a>
+  <a href="#monitor">Monitoring</a>
+  <a href="#trouble">Troubleshooting</a>
+  <a href="#fleet">200-site deployment</a>
+  <a href="#safety">Safety &amp; limits</a>
+</nav>
+
+<main>
+
+<h1>Wonder AI Builder</h1>
+<p class="lede">Bulk-generate WordPress pages and posts from a spreadsheet. Replaces Wonder Page and
+Wonder Blog with one plugin, at roughly 3&ndash;6% of their running cost.</p>
+
+<h2 id="what">What it does</h2>
+<p>You upload a spreadsheet. Each row becomes a page or a post: written by an AI model, given a
+featured image, given JSON-LD schema, and saved as a draft. Generation happens
+<strong>on the server</strong> &mdash; once queued, you can close the tab, shut the laptop, and go home.</p>
+
+<div class="note ok">
+  <strong>The three things that make it cheap</strong>
+  <p><strong>1.</strong> Images come from the media library you already have, matched in PHP. Free.
+     <strong>2.</strong> Schema is built in PHP, never asked of the model. Free.
+     <strong>3.</strong> The shared brief is sent once per import as a cached prefix, not once per row.</p>
+</div>
+
+<h2 id="install">1. Install</h2>
+<div class="step"><div class="step-n">1</div><div>
+  <h3>Deactivate the old plugins</h3>
+  <p>Deactivate <em>Wonder Page</em> and <em>Wonder Blog</em>. Do not delete them yet &mdash; leaving
+  them in place keeps their data intact as a rollback path. This plugin never reads or writes their tables.</p>
+</div></div>
+<div class="step"><div class="step-n">2</div><div>
+  <h3>Upload and activate</h3>
+  <p>Copy the <code>wonder-ai-builder</code> folder to <code>wp-content/plugins/</code>, then activate it.
+  Activation creates six tables and schedules the queue worker.</p>
+</div></div>
+<div class="step"><div class="step-n">3</div><div>
+  <h3>Check for a red notice</h3>
+  <p>If any table failed to create you will see an error at the top of wp-admin naming it. Do not
+  proceed &mdash; fix database permissions first, or every row will silently vanish on import.</p>
+</div></div>
+
+<h2 id="cron">2. Server cron <span class="pill">important</span></h2>
+<p>WordPress&rsquo;s built-in cron only fires when somebody visits the site. On a quiet site, a queue of
+100 pages will barely move. Set up a real cron entry so generation runs unattended.</p>
+
+<p><strong>Recommended</strong> &mdash; WP-CLI, which bypasses the web server entirely (no PHP-FPM timeout,
+its own memory limit, works with zero traffic):</p>
+<pre><code>* * * * * cd /path/to/site &amp;&amp; wp wab run --quiet &gt;/dev/null 2&gt;&amp;1</code></pre>
+
+<p><strong>No WP-CLI?</strong> Hit <code>wp-cron.php</code> instead:</p>
+<pre><code>* * * * * curl -fsS -m 55 "https://example.com/wp-cron.php?doing_wp_cron" &gt;/dev/null 2&gt;&amp;1</code></pre>
+
+<p>Then disable the visitor-triggered version in <code>wp-config.php</code>:</p>
+<pre><code>define( 'DISABLE_WP_CRON', true );</code></pre>
+
+<div class="note">
+  <strong>Every minute is fine</strong>
+  <p>The worker throttles itself to one run every 20 seconds, skips entirely when nothing is queued
+  (one indexed query, ~30ms), and refuses to start when server load is high. A frequent trigger just
+  means less waiting before a queued job begins.</p>
+</div>
+<p>The dashboard shows the exact commands for <em>your</em> install, with real paths, and warns you if
+ticks stop arriving.</p>
+
+<h2 id="keys">3. API keys</h2>
+<p>Two ways. For one site, paste them into <strong>Wonder AI &rarr; Settings</strong>. For many sites,
+use constants &mdash; the keys then never touch the database, backups, or staging clones:</p>
+<pre><code>define( 'WAB_FAL_API_KEY',       '...' );  // images
+define( 'WAB_GEMINI_API_KEY',    '...' );  // text + images
+define( 'WAB_OPENAI_API_KEY',    '...' );  // text
+define( 'WAB_ANTHROPIC_API_KEY', '...' );  // text</code></pre>
+<p>Constants win over anything saved in the admin, and the field is disabled with
+&ldquo;Set in wp-config.php&rdquo; so nobody is confused about which is live.</p>
+
+<div class="note warn">
+  <strong>Keys are never sent to your browser</strong>
+  <p>Settings shows a mask like <code>sk-a&bull;&bull;&bull;&bull;f2c9</code>. Leaving a key field
+  blank keeps the stored value. This is deliberate: the previous version printed the full key into the
+  page HTML, where any script on the page could read it.</p>
+</div>
+
+<h2 id="config">4. Configure</h2>
+<p>Minimum viable setup for a first run:</p>
+<table>
+  <thead><tr><th>Setting</th><th>Start with</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Text provider</td><td>Gemini 2.5 Flash</td><td>Best quality per dollar for bulk work.</td></tr>
+    <tr><td>Images</td><td>Existing library only</td><td>Costs nothing. Confirm match quality before paying for generation.</td></tr>
+    <tr><td>Speed vs cost</td><td>Standard</td><td>See real output in ~30s rather than waiting on a batch.</td></tr>
+    <tr><td>Content depth</td><td>B &mdash; Hybrid sectional</td><td>Best balance of uniqueness and cost.</td></tr>
+    <tr><td>Daily budget</td><td><strong>1.00</strong></td><td>A hard stop while you learn the tool. Raise it later.</td></tr>
+    <tr><td>Pages per minute</td><td>5</td><td>Effectively ~3/min after the wall-clock guard. Leave it.</td></tr>
+    <tr><td>Default status</td><td>Draft</td><td>Always review before publishing.</td></tr>
+  </tbody>
+</table>
+<p>Fill in <strong>Brand voice</strong> too &mdash; industry, audience, differentiators, and anything the
+model must never mention. It is sent once per import as a cached prefix, so detail here is effectively free.</p>
+
+<h2 id="sheet">Spreadsheet format</h2>
+<p>CSV or XLSX. The first row is headers; column names are auto-detected, and you can correct the
+mapping before importing. No column is mandatory, but you need <em>something</em> to make a title from.</p>
+
+<table>
+  <thead><tr><th>Column</th><th>Example</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>Service</code></td><td>Deep Cleaning</td><td>Combined with Location to form the title.</td></tr>
+    <tr><td><code>Location</code></td><td>Dubai Marina</td><td>Drives geo-targeting, <code>areaServed</code> schema, sibling links.</td></tr>
+    <tr><td><code>Title</code></td><td>Deep Cleaning in Dubai Marina</td><td>Overrides the derived title.</td></tr>
+    <tr><td><code>Keywords</code></td><td>deep cleaning, villa cleaning</td><td>Becomes tags; guides the focus keyword.</td></tr>
+    <tr><td><code>Company</code></td><td>Shoot Bright</td><td>Used in copy and schema.</td></tr>
+    <tr><td><code>Phone</code></td><td>+971 4 000 0000</td><td>Included once as a CTA; sets <code>telephone</code>.</td></tr>
+    <tr><td><code>Description</code></td><td>Focus on villas, mention 24h callout</td><td>Free-text brief. The highest-leverage column.</td></tr>
+    <tr><td><code>Post type</code></td><td>page <em>or</em> post</td><td>Per-row override of the dashboard switch.</td></tr>
+    <tr><td><code>Category</code></td><td>Cleaning</td><td>Posts only. Created if missing.</td></tr>
+    <tr><td><code>Image rules</code></td><td>bright interiors, no people</td><td>Only used when generating images.</td></tr>
+    <tr><td><code>Scheduled date</code></td><td>2026-09-01 09:00</td><td>A future date schedules the post.</td></tr>
+    <tr><td><code>Schema</code></td><td><em>see below</em></td><td>Raw JSON-LD, used verbatim.</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <strong>Unmapped columns are kept but never sent to the AI</strong>
+  <p>They are stored for reference only. The previous version dumped every unmapped column into the
+  prompt, so a big Schema column was billed as input on every single row.</p>
+</div>
+
+<h2 id="schema">The Schema column</h2>
+<p>Paste your JSON-LD straight in &mdash; the whole thing, <code>&lt;script&gt;</code> wrapper and all if
+that is how you have it. It is validated, then written into the page after creation. The model is never
+shown it and never asked about it, so it costs nothing.</p>
+
+<p>Five placeholders get filled in after the page exists, which is information no model could have known:</p>
+<table>
+  <thead><tr><th>Placeholder</th><th>Becomes</th></tr></thead>
+  <tbody>
+    <tr><td><code>{{url}}</code></td><td>The final permalink</td></tr>
+    <tr><td><code>{{title}}</code></td><td>The generated title</td></tr>
+    <tr><td><code>{{image}}</code></td><td>Featured image URL</td></tr>
+    <tr><td><code>{{date}}</code></td><td>Publish date, ISO-8601</td></tr>
+    <tr><td><code>{{site}}</code></td><td>Site name</td></tr>
+  </tbody>
+</table>
+
+<pre><code>{"@context":"https://schema.org","@type":"Service",
+ "name":"{{title}}","url":"{{url}}","image":"{{image}}",
+ "provider":{"@type":"LocalBusiness","name":"Shoot Bright","telephone":"+97140000000"},
+ "areaServed":{"@type":"Place","name":"Dubai Marina"}}</code></pre>
+
+<p><strong>Leave the column out</strong> and schema is built automatically from the row &mdash;
+LocalBusiness, Service, Article, BlogPosting, Product, or FAQPage, plus a BreadcrumbList. Also free.
+If your JSON is malformed, it logs a warning and falls back to the auto-built version rather than
+shipping broken markup to Google.</p>
+
+<h2 id="run">Running a batch</h2>
+<div class="step"><div class="step-n">1</div><div><h3>Pick Pages or Posts</h3>
+  <p>The switch at the top. It changes schema type, category handling, and templates.</p></div></div>
+<div class="step"><div class="step-n">2</div><div><h3>Choose depth, images, speed</h3>
+  <p>Defaults are sensible. See the sections below.</p></div></div>
+<div class="step"><div class="step-n">3</div><div><h3>Upload the file</h3>
+  <p>Row count appears immediately, with a mapping grid.</p></div></div>
+<div class="step"><div class="step-n">4</div><div><h3>Check the mapping</h3>
+  <p>Auto-detected values are pre-selected. Correct anything wrong; set unwanted columns to
+  &ldquo;skip&rdquo;. <strong>Import rows</strong> saves them &mdash; nothing is generated and nothing is spent yet.</p></div></div>
+<div class="step"><div class="step-n">5</div><div><h3>Test image matching</h3>
+  <p>Runs the matcher against the first five rows and shows the actual pictures it would pick, with a
+  hit-rate percentage. Free, and it corrects the cost estimate using your real library coverage.</p></div></div>
+<div class="step"><div class="step-n">6</div><div><h3>Queue generation</h3>
+  <p>Shows the total estimate and refuses to start if it would exceed today&rsquo;s budget. Then you can
+  close the tab.</p></div></div>
+
+<div class="note ok">
+  <strong>Closing the tab is safe</strong>
+  <p>The queue lives on the server. The dashboard only reads progress &mdash; it never drives it.
+  Polling pauses when the tab is hidden and resumes when you come back.</p>
+</div>
+
+<h2 id="modes">Standard vs Economy</h2>
+<table>
+  <thead><tr><th>Mode</th><th>Turnaround</th><th>Text cost</th><th>Use for</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Standard</strong></td><td>~16s per page, live</td><td>full</td><td>Single pages, urgent work, first runs</td></tr>
+    <tr><td><strong>Economy</strong></td><td>Minutes to 24h</td><td class="best">~50% off</td><td>Bulk runs of 10+ that are not needed today</td></tr>
+  </tbody>
+</table>
+<p>Economy submits all the writing as one asynchronous batch at half price. Images and publishing still
+happen locally, so only the text is deferred. Needs at least 10 rows &mdash; below that it quietly uses
+Standard, because the wait is not worth it.</p>
+
+<table>
+  <thead><tr><th>Provider</th><th>Economy</th></tr></thead>
+  <tbody>
+    <tr><td>Google Gemini</td><td><span class="pill ok">supported</span></td></tr>
+    <tr><td>OpenAI</td><td><span class="pill ok">supported</span></td></tr>
+    <tr><td>Anthropic Claude</td><td><span class="pill no">standard only</span></td></tr>
+  </tbody>
+</table>
+<p>Choosing Economy with Anthropic is not an error &mdash; it tells you plainly and runs at Standard price.</p>
+
+<div class="note">
+  <strong>Nothing gets stranded</strong>
+  <p>If a batch fails, is cancelled, or goes quiet for 48 hours, its rows return to the normal queue
+  and generate at full price. Slower and dearer beats losing the work. And once the text has been paid
+  for, a later failure never re-bills it.</p>
+</div>
+
+<h2 id="images">How images are chosen</h2>
+<div class="flow">Featured image, cheapest first:
+
+  1. Already resolved for this row?  -->  reuse            $0.000
+  2. Match in your media library?    -->  use it           $0.000
+  3. Generate (if enabled)           -->  fal / Gemini     $0.003+
+
+In-content images:  ALWAYS the library. Never generated. Never billed.</div>
+
+<p>Matching is pure PHP &mdash; weighted keyword overlap across alt text, title, caption, description,
+filename, and the categories of whatever post the image is attached to. Landscape crops score higher
+because most themes handle them better. No API call, so it costs nothing and adds no latency.</p>
+
+<p>Among equally good matches it picks the <strong>least previously used</strong> one, so a 100-page import
+spreads across your library instead of stamping one photo onto every page. In-content images are matched
+against each section&rsquo;s own H2, so the picture suits the section it sits in.</p>
+
+<div class="note ok">
+  <strong>Usually better, not just cheaper</strong>
+  <p>Sites with a few hundred published pages already own real, on-brand, CDN-cached photography.
+  That generally beats a generic AI render &mdash; and it is free.</p>
+</div>
+
+<h2 id="depth">Content depth</h2>
+<table>
+  <thead><tr><th>Option</th><th>Words</th><th class="num">Text cost</th><th>Best for</th></tr></thead>
+  <tbody>
+    <tr><td>A &mdash; Template + local intro</td><td>~150</td><td class="num">$0.001</td><td>500+ low-competition locations</td></tr>
+    <tr><td><strong>B &mdash; Hybrid sectional</strong></td><td>~450</td><td class="num best">$0.003</td><td><strong>Recommended.</strong> 100&ndash;500 locations</td></tr>
+    <tr><td>C &mdash; Full unique body</td><td>~900</td><td class="num">$0.007</td><td>Competitive metros, money pages</td></tr>
+    <tr><td>D &mdash; Pillar / cluster parent</td><td>~1800</td><td class="num">$0.013</td><td>Authority hubs</td></tr>
+  </tbody>
+</table>
+<p><strong>Why B, and it is an SEO argument rather than a cost one.</strong> Google&rsquo;s helpful-content
+systems penalise near-duplicate doorway pages. A is templated enough to look like one at scale. C costs
+2.3&times; for quality gains that do not move rankings on low-competition location terms. B keeps the
+genuinely local content unique and shares only the boilerplate that was never going to rank.</p>
+<p>B also <em>rotates page structure</em> across a location set &mdash; a different opening angle per row,
+distributed evenly &mdash; so 100 pages do not fingerprint as a farm. That rotation is computed in PHP, free.</p>
+
+<h2 id="cost">Cost reference</h2>
+<p>Per page, depth B, library images:</p>
+<table>
+  <thead><tr><th>Configuration</th><th class="num">Per page</th><th class="num">100 pages</th><th class="num">20,000 pages</th></tr></thead>
+  <tbody>
+    <tr><td class="bad">Old plugins (Wonder Page/Blog)</td><td class="num bad">$0.0470</td><td class="num bad">$4.70</td><td class="num bad">$940</td></tr>
+    <tr><td>v2 Standard + generated images</td><td class="num">$0.0060</td><td class="num">$0.60</td><td class="num">$120</td></tr>
+    <tr><td>v2 Standard + library images</td><td class="num">$0.0030</td><td class="num">$0.30</td><td class="num">$60</td></tr>
+    <tr><td class="best">v2 Economy + library images</td><td class="num best">$0.0015</td><td class="num best">$0.15</td><td class="num best">$30</td></tr>
+  </tbody>
+</table>
+
+<h3>Image model prices</h3>
+<table>
+  <thead><tr><th>Model</th><th class="num">Per image</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td class="best">Library match</td><td class="num best">$0.000</td><td>Free, instant, on-brand</td></tr>
+    <tr><td>fal &mdash; FLUX.1 schnell</td><td class="num">$0.003</td><td>Recommended when generating</td></tr>
+    <tr><td>fal &mdash; FLUX.1 dev</td><td class="num">$0.025</td><td>Better adherence</td></tr>
+    <tr><td>fal &mdash; FLUX.2 pro</td><td class="num">$0.030</td><td>Hero images only</td></tr>
+    <tr><td>Gemini 2.5 Flash Image</td><td class="num">$0.039</td><td>What the old plugins used</td></tr>
+  </tbody>
+</table>
+
+<div class="note warn">
+  <strong>Set a daily budget</strong>
+  <p>Enter a figure in Settings and the queue stops itself when it is reached, rather than discovering
+  the overshoot on your invoice. The 100-row estimate is also checked <em>before</em> queueing.</p>
+</div>
+
+<h2 id="cli">Command line</h2>
+<pre><code>wp wab status              # queue, spend, and health
+wp wab run                 # process one batch now
+wp wab run --force         # ignore throttle and load guards
+wp wab run --max-jobs=10   # override jobs per batch
+wp wab pause               # stop taking new work
+wp wab resume</code></pre>
+<p><code>wp wab status</code> is the fastest way to confirm a site is healthy, and the right thing to
+loop over when checking a fleet.</p>
+
+<h2 id="monitor">Monitoring</h2>
+<p>The dashboard answers the two questions that matter &mdash; what will this cost, and is it running &mdash;
+above the fold. Below that, every job shows its status, attempt count, actual cost, and error text, with
+links to the created page.</p>
+<table>
+  <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>queued</code></td><td>Waiting for the next tick.</td></tr>
+    <tr><td><code>batched</code></td><td>Economy mode; awaiting results. Collected automatically.</td></tr>
+    <tr><td><code>processing</code></td><td>Being generated right now.</td></tr>
+    <tr><td><code>done</code></td><td>Page created. Click through to review.</td></tr>
+    <tr><td><code>failed</code></td><td>Gave up. Reason shown; Retry available.</td></tr>
+    <tr><td><code>cancelled</code></td><td>Cancelled by an operator.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="trouble">Troubleshooting</h2>
+<h3>Nothing happens after queueing</h3>
+<p>Almost always cron. Run <code>wp wab status</code> &mdash; if &ldquo;last tick&rdquo; says
+<em>never</em> or is many minutes old, the cron entry is missing or failing. See
+<a href="#cron">Server cron</a>. The dashboard warns about this on its own.</p>
+
+<h3>&ldquo;Daily AI budget reached&rdquo;</h3>
+<p>Working as designed. Raise the budget in Settings, or wait for the date to roll over.</p>
+
+<h3>Every image is the same photo</h3>
+<p>Your library has few matching images, so the same one keeps winning. Use <strong>Test image
+matching</strong> to see the hit rate. Improving alt text on your existing images is the cheapest fix;
+switching to &ldquo;Library first, then generate&rdquo; is the fastest.</p>
+
+<h3>Jobs failing with &ldquo;content too short&rdquo;</h3>
+<p>The model returned too little to publish. Usually a thin row &mdash; add a Description brief. This is
+deliberately <em>not</em> retried, because a retry would bill again for the same outcome.</p>
+
+<h3>Server feels slow during a run</h3>
+<p>Lower <strong>Pages per minute</strong>, or set <strong>Pause above server load</strong> to a lower
+number. The worker already skips ticks when load is high; this makes it more cautious.</p>
+
+<h3>A batch has been pending for hours</h3>
+<p>Normal &mdash; the target is 24 hours and it is usually much faster. Nothing is lost: after 48 hours
+the rows return to the normal queue automatically.</p>
+
+<h2 id="fleet">200-site deployment</h2>
+<ol>
+  <li>Put all four <code>WAB_*_API_KEY</code> constants in each site&rsquo;s <code>wp-config.php</code> via your provisioning tool.</li>
+  <li>Configure one site fully, then <strong>Export config</strong> and <strong>Import config</strong> on the rest. Keys are never included in the export.</li>
+  <li>Add the WP-CLI cron line per site. Each install computes its own 0&ndash;59s offset from its URL, so 200 sites do not all wake at <code>:00</code>.</li>
+  <li>Verify with a fleet loop: <code>for d in /sites/*; do (cd $d &amp;&amp; wp wab status); done</code></li>
+</ol>
+
+<div class="note danger">
+  <strong>Limit how many sites generate at once</strong>
+  <p>Each site caps itself at one worker using about 80&nbsp;MB. Idle sites cost almost nothing. But 200
+  sites generating <em>simultaneously</em> is roughly 16&nbsp;GB of RAM.</p>
+  <p>Run bulk generation on <strong>10&ndash;20 sites at a time</strong>. At ~33 minutes per 100 pages,
+  20 sites in parallel still clears 2,000 pages in about half an hour, peaking near 1.6&nbsp;GB. The
+  load guard will start skipping ticks if you overshoot, but treat that as a safety net, not a plan.</p>
+</div>
+
+<h2 id="safety">Safety &amp; limits</h2>
+<h3>Throughput</h3>
+<p>About <strong>180 pages/hour per site</strong> &mdash; roughly 3 per minute. Around 94% of that is
+waiting on the model, not the plugin. Raising &ldquo;Pages per minute&rdquo; above 3 will not help; the
+45-second-per-tick guard is the real limit, and it exists to leave the server a quarter of every minute free.</p>
+
+<h3>Resources per site</h3>
+<table>
+  <tbody>
+    <tr><td>Concurrent workers</td><td><strong>Exactly one</strong>, enforced by a database lock</td></tr>
+    <tr><td>Peak memory</td><td>~80 MB</td></tr>
+    <tr><td>Database load</td><td>~49 queries/job, ~2.5 queries/second sustained</td></tr>
+    <tr><td>Idle cost</td><td>One indexed query, ~30ms</td></tr>
+    <tr><td>Disk</td><td>~80&ndash;200 KB per generated image; zero for library reuse</td></tr>
+  </tbody>
+</table>
+
+<h3>Permissions</h3>
+<ul>
+  <li><strong>Editors</strong> can import spreadsheets, queue generation, and manage the queue.</li>
+  <li><strong>Administrators</strong> additionally control settings, API keys, budget, and cancelling all queued work.</li>
+</ul>
+
+<h3>Review before publishing</h3>
+<p>Pages are created as <strong>drafts</strong> by default. Keep it that way. AI copy needs a human pass
+&mdash; for factual claims especially. The model is instructed never to invent prices, awards,
+certifications, review counts, or years in business, but instructions are not guarantees.</p>
+
+<div class="note warn">
+  <strong>Before a first production run</strong>
+  <p>Install on one staging site. Set the budget to <code>$1</code>. Import <strong>5 rows</strong> with
+  &ldquo;Existing library only&rdquo;. Confirm <code>wp wab status</code> shows ticks arriving and read
+  the five drafts end to end. Only then scale up. Do not go to 200 sites until 5 rows are clean.</p>
+</div>
+
+<footer>
+  Wonder AI Builder v2.0.0 &middot; Operator guide &middot; Replaces Wonder Page and Wonder Blog.<br>
+  Detailed rationale for each design decision is in the header comment of every PHP class.
+</footer>
+
+</main>
+</div>
+</body>
+</html>
