@@ -1,12 +1,13 @@
 <?php
 /**
  * Plugin Name:       Wonder AI Builder
- * Plugin URI:        https://goliveweb.eu/
+ * Plugin URI:        https://saikatchowdhury.com/
  * Description:       Bulk-generate SEO Pages AND Posts from a spreadsheet using pluggable AI text and image providers. Unified successor to Wonder Page + Wonder Blog.
  * Version:           2.0.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
- * Author:            GoLiveWeb
+ * Author:            WonderWebStudio
+ * Author URI:        https://saikatchowdhury.com/
  * License:           GPL-2.0-or-later
  * Text Domain:       wonder-ai-builder
  *

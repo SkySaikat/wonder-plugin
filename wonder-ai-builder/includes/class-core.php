@@ -17,8 +17,19 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class WAB_Core {
 
-    const MENU_SLUG     = 'wonder-ai-builder';
-    const SETTINGS_SLUG = 'wonder-ai-builder-settings';
+    /**
+     * One real WordPress admin page per task.
+     *
+     * The first build put everything on a single screen, then a second attempt used
+     * client-side tabs. Both were rejected as confusing: too much on one page, and
+     * no clear "I am looking at exactly one thing" state. These are genuine submenu
+     * pages, so each has its own URL, its own back button, and its own bookmark.
+     */
+    const MENU_SLUG     = 'wonder-ai-builder';            // Dashboard
+    const IMPORT_SLUG   = 'wonder-ai-import';             // Upload a sheet
+    const SHEETS_SLUG   = 'wonder-ai-sheets';             // Sheet list + single-sheet rows
+    const QUEUE_SLUG    = 'wonder-ai-queue';              // Job queue
+    const SETTINGS_SLUG = 'wonder-ai-builder-settings';   // Settings
 
     public function run() {
         // --- Queue infrastructure. Must run on every load. ------------
@@ -48,6 +59,8 @@ class WAB_Core {
             'wab_status'        => array( $this, 'ajax_status' ),
             'wab_jobs'          => array( $this, 'ajax_jobs' ),
             'wab_imports'       => array( $this, 'ajax_imports' ),
+            'wab_rows'          => array( $this, 'ajax_rows' ),
+            'wab_delete_import' => array( $this, 'ajax_delete_import' ),
             'wab_retry'         => array( $this, 'ajax_retry' ),
             'wab_cancel'        => array( $this, 'ajax_cancel' ),
             'wab_pause'         => array( $this, 'ajax_pause' ),
@@ -75,38 +88,44 @@ class WAB_Core {
     // ---------------------------------------------------------------
 
     public function menu() {
-        // Editors can generate; only admins reach Settings.
+        $gen    = WAB_Security::CAP_GENERATE; // Editors and up.
+        $manage = WAB_Security::CAP_MANAGE;   // Admins only.
+
         add_menu_page(
             __( 'Wonder AI Builder', 'wonder-ai-builder' ),
             __( 'Wonder AI', 'wonder-ai-builder' ),
-            WAB_Security::CAP_GENERATE,
+            $gen,
             self::MENU_SLUG,
-            array( $this, 'render_main' ),
+            array( $this, 'render_dashboard' ),
             'dashicons-superhero-alt',
             30
         );
 
-        add_submenu_page(
-            self::MENU_SLUG,
-            __( 'Dashboard', 'wonder-ai-builder' ),
-            __( 'Dashboard', 'wonder-ai-builder' ),
-            WAB_Security::CAP_GENERATE,
-            self::MENU_SLUG,
-            array( $this, 'render_main' )
+        $pages = array(
+            array( self::MENU_SLUG,   __( 'Dashboard', 'wonder-ai-builder' ),    $gen,    'render_dashboard' ),
+            array( self::SHEETS_SLUG, __( 'Sheets', 'wonder-ai-builder' ),       $gen,    'render_sheets' ),
+            array( self::QUEUE_SLUG,  __( 'Queue', 'wonder-ai-builder' ),        $gen,    'render_queue' ),
+            array( self::IMPORT_SLUG, __( 'Import a sheet', 'wonder-ai-builder' ), $gen,  'render_import' ),
+            array( self::SETTINGS_SLUG, __( 'Settings', 'wonder-ai-builder' ),   $manage, 'render_settings' ),
         );
 
-        add_submenu_page(
-            self::MENU_SLUG,
-            __( 'Settings', 'wonder-ai-builder' ),
-            __( 'Settings', 'wonder-ai-builder' ),
-            WAB_Security::CAP_MANAGE,
-            self::SETTINGS_SLUG,
-            array( $this, 'render_settings' )
-        );
+        foreach ( $pages as $p ) {
+            add_submenu_page( self::MENU_SLUG, $p[1], $p[1], $p[2], $p[0], array( $this, $p[3] ) );
+        }
+    }
+
+    /** Shared page URLs, so no view has to hand-build one. */
+    public static function url( $slug, array $args = array() ) {
+        return add_query_arg( array_merge( array( 'page' => $slug ), $args ), admin_url( 'admin.php' ) );
     }
 
     public function assets( $hook ) {
-        if ( strpos( (string) $hook, self::MENU_SLUG ) === false ) return;
+        // Match the shared 'wonder-ai' prefix, NOT MENU_SLUG. The page slugs are
+        // wonder-ai-sheets / -queue / -import, none of which contain
+        // 'wonder-ai-builder', so testing against MENU_SLUG loaded the CSS and JS on
+        // the Dashboard and Settings only — every other screen would have rendered
+        // unstyled with no working buttons.
+        if ( strpos( (string) $hook, 'wonder-ai' ) === false ) return;
 
         wp_enqueue_style( 'wab-admin', WAB_PLUGIN_URL . 'assets/css/admin.css', array(), WAB_VERSION );
         wp_enqueue_script( 'wab-admin', WAB_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), WAB_VERSION, true );
@@ -114,6 +133,10 @@ class WAB_Core {
         wp_localize_script( 'wab-admin', 'WAB', array(
             'ajax'  => admin_url( 'admin-ajax.php' ),
             'nonce' => wp_create_nonce( WAB_Security::NONCE_ACTION ),
+            // Page URLs, so JS never hand-builds an admin link.
+            'sheetsUrl' => self::url( self::SHEETS_SLUG ),
+            'queueUrl'  => self::url( self::QUEUE_SLUG ),
+            'importUrl' => self::url( self::IMPORT_SLUG ),
             // No API keys are ever passed to the browser — only readiness booleans,
             // which live inside the settings state payload.
             'canManage' => current_user_can( WAB_Security::CAP_MANAGE ),
@@ -190,6 +213,94 @@ class WAB_Core {
         }
 
         wp_send_json_success( array( 'imports' => $imports ) );
+    }
+
+    /**
+     * List the rows of one import, so the operator can pick specific ones.
+     *
+     * Each row carries its current job state, which is what makes selective
+     * generation intelligible: you can see at a glance which rows are already done
+     * and tick only the ones you still want.
+     */
+    public function ajax_rows() {
+        WAB_Security::guard( WAB_Security::CAP_GENERATE );
+
+        global $wpdb;
+
+        $import_id = isset( $_POST['import_id'] ) ? sanitize_text_field( wp_unslash( $_POST['import_id'] ) ) : '';
+        if ( $import_id === '' ) {
+            wp_send_json_error( array( 'message' => __( 'Missing import.', 'wonder-ai-builder' ) ) );
+        }
+
+        $per_page = 50;
+        $page     = max( 1, isset( $_POST['page'] ) ? (int) $_POST['page'] : 1 );
+        $offset   = ( $page - 1 ) * $per_page;
+
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT r.id, r.row_index, r.title, r.services, r.location, r.post_type,
+                    r.category, r.schema_markup <> '' AS has_schema,
+                    j.status AS job_status, j.result_post_id, j.error_message, j.cost_usd
+               FROM {$wpdb->prefix}wab_rows r
+          LEFT JOIN {$wpdb->prefix}wab_jobs j
+                 ON j.import_id = r.import_id AND j.row_index = r.row_index
+              WHERE r.import_id = %s
+           ORDER BY r.row_index ASC
+              LIMIT %d OFFSET %d",
+            $import_id,
+            $per_page,
+            $offset
+        ) );
+
+        $total = (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}wab_rows WHERE import_id = %s",
+            $import_id
+        ) );
+
+        foreach ( (array) $rows as $r ) {
+            $r->edit_url = $r->result_post_id ? get_edit_post_link( (int) $r->result_post_id, 'url' ) : '';
+            // A row with no job record has never been queued.
+            $r->job_status = $r->job_status ?: 'new';
+        }
+
+        wp_send_json_success( array(
+            'rows'     => $rows ?: array(),
+            'total'    => $total,
+            'page'     => $page,
+            'per_page' => $per_page,
+        ) );
+    }
+
+    /**
+     * Remove an import and its rows. Jobs and generated posts are left alone —
+     * deleting an import must never delete published content.
+     */
+    public function ajax_delete_import() {
+        WAB_Security::guard( WAB_Security::CAP_MANAGE );
+
+        global $wpdb;
+        $import_id = isset( $_POST['import_id'] ) ? sanitize_text_field( wp_unslash( $_POST['import_id'] ) ) : '';
+        if ( $import_id === '' ) {
+            wp_send_json_error( array( 'message' => __( 'Missing import.', 'wonder-ai-builder' ) ) );
+        }
+
+        $queued = (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}wab_jobs WHERE import_id = %s AND status IN ('queued','processing','batched')",
+            $import_id
+        ) );
+
+        if ( $queued > 0 ) {
+            wp_send_json_error( array(
+                'message' => sprintf(
+                    __( 'This import still has %d job(s) in flight. Cancel them first.', 'wonder-ai-builder' ),
+                    $queued
+                ),
+            ) );
+        }
+
+        $wpdb->delete( $wpdb->prefix . 'wab_rows', array( 'import_id' => $import_id ) );
+        $wpdb->delete( $wpdb->prefix . 'wab_imports', array( 'import_id' => $import_id ) );
+
+        wp_send_json_success( array( 'deleted' => true ) );
     }
 
     public function ajax_retry() {
@@ -282,17 +393,35 @@ class WAB_Core {
     // Views
     // ---------------------------------------------------------------
 
-    public function render_main() {
+    private function view( $file, $capability ) {
+        if ( ! current_user_can( $capability ) ) {
+            wp_die( esc_html__( 'You do not have permission to view this page.', 'wonder-ai-builder' ) );
+        }
+        include WAB_PLUGIN_DIR . 'admin/views/' . $file . '.php';
+    }
+
+    public function render_dashboard() { $this->view( 'dashboard', WAB_Security::CAP_GENERATE ); }
+    public function render_import()    { $this->view( 'import',    WAB_Security::CAP_GENERATE ); }
+    public function render_queue()     { $this->view( 'queue',     WAB_Security::CAP_GENERATE ); }
+    public function render_settings()  { $this->view( 'settings',  WAB_Security::CAP_MANAGE ); }
+
+    /**
+     * Sheets is two views behind one menu item: the list, or one sheet's rows.
+     * Viewing a single sheet is the "one thing at a time" case, so it gets its own
+     * URL and its own screen rather than expanding inline.
+     */
+    public function render_sheets() {
         if ( ! current_user_can( WAB_Security::CAP_GENERATE ) ) {
             wp_die( esc_html__( 'You do not have permission to view this page.', 'wonder-ai-builder' ) );
         }
-        include WAB_PLUGIN_DIR . 'admin/views/main.php';
-    }
 
-    public function render_settings() {
-        if ( ! current_user_can( WAB_Security::CAP_MANAGE ) ) {
-            wp_die( esc_html__( 'You do not have permission to view this page.', 'wonder-ai-builder' ) );
+        $import_id = isset( $_GET['import_id'] ) ? sanitize_text_field( wp_unslash( $_GET['import_id'] ) ) : '';
+
+        if ( $import_id !== '' ) {
+            include WAB_PLUGIN_DIR . 'admin/views/sheet-single.php';
+            return;
         }
-        include WAB_PLUGIN_DIR . 'admin/views/settings.php';
+
+        include WAB_PLUGIN_DIR . 'admin/views/sheets.php';
     }
 }

@@ -249,13 +249,51 @@ class WAB_Importer {
             wp_send_json_error( array( 'message' => __( 'Missing import.', 'wonder-ai-builder' ) ) );
         }
 
-        $rows = $wpdb->get_results( $wpdb->prepare(
-            "SELECT id, row_index FROM {$wpdb->prefix}wab_rows WHERE import_id = %s ORDER BY row_index ASC",
-            $import_id
-        ) );
+        // Optional: generate only SPECIFIC rows.
+        //
+        // This is what makes "I imported 5 sheets and want 2 blog posts out of one of
+        // them" possible. Without it the only choice was all-or-nothing per import.
+        $row_ids = isset( $_POST['row_ids'] ) ? array_map( 'intval', (array) wp_unslash( $_POST['row_ids'] ) ) : array();
+        $row_ids = array_values( array_filter( array_unique( $row_ids ) ) );
+
+        // Optional per-generation post type override, so the same sheet can produce
+        // pages for some rows and posts for others.
+        $override = isset( $_POST['post_type'] ) ? sanitize_key( wp_unslash( $_POST['post_type'] ) ) : '';
+        if ( ! in_array( $override, array( 'page', 'post' ), true ) ) {
+            $override = '';
+        }
+
+        if ( ! empty( $row_ids ) ) {
+            $ph   = implode( ',', array_fill( 0, count( $row_ids ), '%d' ) );
+            $args = array_merge( array( $import_id ), $row_ids );
+
+            $rows = $wpdb->get_results( $wpdb->prepare(
+                "SELECT id, row_index FROM {$wpdb->prefix}wab_rows
+                  WHERE import_id = %s AND id IN ({$ph}) ORDER BY row_index ASC",
+                $args
+            ) );
+        } else {
+            $rows = $wpdb->get_results( $wpdb->prepare(
+                "SELECT id, row_index FROM {$wpdb->prefix}wab_rows WHERE import_id = %s ORDER BY row_index ASC",
+                $import_id
+            ) );
+        }
 
         if ( empty( $rows ) ) {
-            wp_send_json_error( array( 'message' => __( 'No rows found for this import.', 'wonder-ai-builder' ) ) );
+            wp_send_json_error( array( 'message' => __( 'No matching rows found.', 'wonder-ai-builder' ) ) );
+        }
+
+        // Apply the override to just these rows. The generator reads row->post_type
+        // first, so this takes precedence over the import and global defaults.
+        if ( $override !== '' ) {
+            $ids  = wp_list_pluck( $rows, 'id' );
+            $ph   = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+            $args = array_merge( array( $override ), array_map( 'intval', $ids ) );
+
+            $wpdb->query( $wpdb->prepare(
+                "UPDATE {$wpdb->prefix}wab_rows SET post_type = %s WHERE id IN ({$ph})",
+                $args
+            ) );
         }
 
         // Pre-flight budget check so a 100-row run is refused up front rather than

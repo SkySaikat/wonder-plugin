@@ -2,30 +2,27 @@
 /**
  * Wonder AI Builder admin.
  *
- * Polling is deliberately light and stops when the tab is hidden: generation runs
- * server-side, so the UI is a viewer, not a driver. Closing the tab must not affect
- * the queue — and must not leave a timer hammering admin-ajax either.
+ * Each admin screen is a separate WordPress page now, so this file has no routing,
+ * no tab state, and no shared wizard. It detects which page it is on by the presence
+ * of a root element and binds only that behaviour.
+ *
+ * Rows and sheets are rendered server-side; JavaScript handles selection, the
+ * Generate call, and live queue polling. Generation itself runs on the server, so
+ * this UI is a viewer — closing the tab changes nothing.
  */
 ( function ( $ ) {
   'use strict';
 
   var App = {
-    state: { importId: '', uploadKey: '', status: 'all', page: 1, timer: null },
 
-    /**
-     * Escape for HTML text and DOUBLE-quoted attributes.
-     * Includes the single quote, which v1's helper omitted — harmless there only
-     * because no call site used single-quoted attributes, which is a fragile
-     * invariant to rely on.
-     */
-    esc: function ( s ) {
-      if ( s === null || s === undefined ) { return ''; }
-      return String( s )
-        .replace( /&/g, '&amp;' )
-        .replace( /</g, '&lt;' )
-        .replace( />/g, '&gt;' )
-        .replace( /"/g, '&quot;' )
-        .replace( /'/g, '&#39;' );
+    s: { selected: {}, jobStatus: 'all', jobPage: 1, uploadKey: '', timer: null },
+
+    /** Escapes text and double-quoted attributes, single quote included. */
+    esc: function ( v ) {
+      if ( v === null || v === undefined ) { return ''; }
+      return String( v )
+        .replace( /&/g, '&amp;' ).replace( /</g, '&lt;' ).replace( />/g, '&gt;' )
+        .replace( /"/g, '&quot;' ).replace( /'/g, '&#39;' );
     },
 
     post: function ( action, data ) {
@@ -33,54 +30,266 @@
     },
 
     money: function ( n ) {
-      return '$' + ( Number( n ) || 0 ).toFixed( 4 ).replace( /0+$/, '' ).replace( /\.$/, '' );
+      n = Number( n ) || 0;
+      return '$' + ( n < 0.01 ? n.toFixed( 4 ) : n.toFixed( 2 ) );
     },
 
-    notify: function ( sel, msg, kind ) {
-      $( sel ).attr( 'class', 'wab-status wab-status-' + ( kind || 'info' ) ).text( msg );
+    say: function ( sel, html, kind ) {
+      $( sel ).attr( 'class', 'wab-status wab-status-' + ( kind || 'info' ) ).html( html );
     },
 
-    // -----------------------------------------------------------
+    // ===========================================================
     init: function () {
-      this.bindRun();
-      this.bindOps();
-      this.bindSettings();
+      if ( ! $( '.wab' ).length ) { return; }
 
-      if ( $( '#wab-jobs' ).length ) {
-        this.refresh();
-        this.startPolling();
-        // Pause polling while the tab is hidden; resume on return.
-        document.addEventListener( 'visibilitychange', function () {
-          if ( document.hidden ) { App.stopPolling(); } else { App.refresh(); App.startPolling(); }
-        } );
-      }
+      this.bindRunState();          // header pause/resume — present on every page
+
+      if ( $( '#wab-selbar' ).length )  { this.bindRowSelection(); }
+      if ( $( '#wab-jobs' ).length )    { this.bindQueue(); this.loadJobs(); this.startPolling(); }
+      if ( $( '#wab-file' ).length )    { this.bindImport(); }
+      if ( $( '#wab-settings-state' ).length ) { this.bindSettings(); }
     },
 
     startPolling: function () {
+      var self = this;
       this.stopPolling();
-      this.state.timer = window.setInterval( function () { App.refresh(); }, 8000 );
+      this.s.timer = window.setInterval( function () { self.loadJobs( true ); }, 8000 );
+
+      document.addEventListener( 'visibilitychange', function () {
+        if ( document.hidden ) { self.stopPolling(); }
+        else { self.loadJobs( true ); self.startPolling(); }
+      } );
     },
 
     stopPolling: function () {
-      if ( this.state.timer ) { window.clearInterval( this.state.timer ); this.state.timer = null; }
+      if ( this.s.timer ) { window.clearInterval( this.s.timer ); this.s.timer = null; }
     },
 
-    // -----------------------------------------------------------
-    // New run
-    // -----------------------------------------------------------
-    bindRun: function () {
-      // Page / Post switch
-      $( document ).on( 'click', '.wab-switch-opt', function () {
-        $( '.wab-switch-opt' ).removeClass( 'is-active' ).attr( 'aria-checked', 'false' );
-        $( this ).addClass( 'is-active' ).attr( 'aria-checked', 'true' );
+    // ===========================================================
+    bindRunState: function () {
+      $( document ).on( 'click', '#wab-pause',  function () { App.post( 'wab_pause'  ).done( function () { location.reload(); } ); } );
+      $( document ).on( 'click', '#wab-resume', function () { App.post( 'wab_resume' ).done( function () { location.reload(); } ); } );
+    },
+
+    // ===========================================================
+    // Sheet page: row selection + generate
+    // ===========================================================
+    bindRowSelection: function () {
+      var importId = $( '#wab-selbar' ).data( 'import' );
+
+      $( document ).on( 'change', '#wab-select-all', function () {
+        var on = this.checked;
+        $( '.wab-row-check:not(:disabled)' ).each( function () {
+          this.checked = on;
+          if ( on ) { App.s.selected[ this.value ] = true; } else { delete App.s.selected[ this.value ]; }
+        } );
+        App.refreshSelection();
       } );
 
-      $( document ).on( 'change', '#wab-mode', function () {
-        var note = $( this ).find( ':selected' ).data( 'words' );
-        $( '#wab-mode-note' ).text( note ? ( '~' + note + ' words per page.' ) : '' );
+      $( document ).on( 'change', '.wab-row-check', function () {
+        if ( this.checked ) { App.s.selected[ this.value ] = true; } else { delete App.s.selected[ this.value ]; }
+        App.refreshSelection();
       } );
 
-      $( document ).on( 'change', '#wab-file', function () {
+      // Clicking anywhere on an unlocked row toggles it — much faster than
+      // aiming at 14px checkboxes down a 50-row list.
+      $( document ).on( 'click', '.wab-rowtable tbody tr:not(.wab-row-locked)', function ( e ) {
+        if ( $( e.target ).is( 'input, a, button, label' ) ) { return; }
+        var $c = $( this ).find( '.wab-row-check' );
+        $c.prop( 'checked', ! $c.prop( 'checked' ) ).trigger( 'change' );
+      } );
+
+      $( document ).on( 'click', '#wab-generate', function () {
+        var ids = Object.keys( App.s.selected );
+        if ( ! ids.length ) { return; }
+
+        var $btn = $( this ).prop( 'disabled', true ).text( 'Queueing…' );
+
+        App.post( 'wab_queue', {
+          import_id: importId,
+          row_ids: ids,
+          post_type: $( '#wab-gen-type' ).val()
+        } ).done( function ( r ) {
+          if ( ! r || ! r.success ) {
+            App.say( '#wab-gen-result', App.esc( ( r && r.data && r.data.message ) || WAB.i18n.genericError ), 'error' );
+            $btn.prop( 'disabled', false );
+            App.refreshSelection();
+            return;
+          }
+
+          App.say( '#wab-gen-result',
+            '<strong>' + App.esc( r.data.message ) + '</strong> ' +
+            '<a href="' + App.esc( WAB.queueUrl ) + '">' + App.esc( 'Open the queue →' ) + '</a>',
+            'ok' );
+
+          // Reload so row states reflect reality rather than a guess.
+          window.setTimeout( function () { location.reload(); }, 1200 );
+        } ).fail( function () {
+          App.say( '#wab-gen-result', 'Request failed.', 'error' );
+          $btn.prop( 'disabled', false );
+        } );
+      } );
+
+      $( document ).on( 'click', '#wab-test-images', function () {
+        App.say( '#wab-gen-result', 'Checking your media library…', 'info' );
+
+        App.post( 'wab_preview_image', { import_id: importId, limit: 5 } ).done( function ( r ) {
+          if ( ! r || ! r.success ) { App.say( '#wab-gen-result', WAB.i18n.genericError, 'error' ); return; }
+
+          var h = '<strong>' + r.data.hit_rate + '% of sampled rows matched an existing image</strong> — ' +
+                  'revised estimate ' + App.esc( App.money( r.data.estimate ) ) + ' per page.' +
+                  '<ul class="wab-preview-list">';
+
+          ( r.data.previews || [] ).forEach( function ( p ) {
+            h += '<li>';
+            h += p.matched
+              ? '<img src="' + App.esc( p.url ) + '" alt="" width="44" height="44">'
+              : '<span class="wab-miss">—</span>';
+            h += '<span><strong>' + App.esc( p.row ) + '</strong><br>' +
+                 App.esc( p.matched ? p.title : p.reason ) + '</span></li>';
+          } );
+
+          App.say( '#wab-gen-result', h + '</ul>', 'ok' );
+          $( '#wab-estimate' ).data( 'per', r.data.estimate );
+          App.refreshSelection();
+        } );
+      } );
+
+      this.refreshSelection();
+    },
+
+    refreshSelection: function () {
+      var n = Object.keys( this.s.selected ).length,
+          avail = $( '.wab-row-check:not(:disabled)' ).length,
+          per = Number( $( '#wab-estimate' ).data( 'per' ) ) || 0;
+
+      $( '#wab-sel-count' ).text( n ? ( n + ' selected' ) : 'Select all on this page' );
+
+      $( '#wab-generate' )
+        .prop( 'disabled', n === 0 )
+        .text( n ? ( 'Generate ' + n + ' selected' ) : 'Generate selected' );
+
+      // Show the projected spend next to the button, before it is spent.
+      $( '#wab-estimate' ).text( n ? ( '≈ ' + this.money( n * per ) ) : '' );
+
+      var all = $( '#wab-select-all' )[ 0 ];
+      if ( all ) {
+        all.checked = ( n > 0 && n === avail );
+        all.indeterminate = ( n > 0 && n < avail );
+      }
+    },
+
+    // ===========================================================
+    // Queue page
+    // ===========================================================
+    bindQueue: function () {
+      $( document ).on( 'click', '.wab-chip[data-status]', function () {
+        $( '.wab-chip[data-status]' ).removeClass( 'is-active' );
+        $( this ).addClass( 'is-active' );
+        App.s.jobStatus = $( this ).data( 'status' );
+        App.s.jobPage = 1;
+        App.loadJobs();
+      } );
+
+      $( document ).on( 'click', '#wab-run-now', function () {
+        var $b = $( this ).prop( 'disabled', true ).text( 'Running…' );
+        App.post( 'wab_run_now' ).always( function () {
+          $b.prop( 'disabled', false ).text( 'Run now' );
+          App.loadJobs();
+        } );
+      } );
+
+      $( document ).on( 'click', '#wab-drain', function () {
+        if ( ! window.confirm( WAB.i18n.confirmDrain ) ) { return; }
+        App.post( 'wab_drain' ).done( function () { App.loadJobs(); } );
+      } );
+
+      $( document ).on( 'click', '.wab-retry',  function () { App.post( 'wab_retry',  { job_id: $( this ).data( 'job' ) } ).done( function () { App.loadJobs(); } ); } );
+      $( document ).on( 'click', '.wab-cancel', function () { App.post( 'wab_cancel', { job_id: $( this ).data( 'job' ) } ).done( function () { App.loadJobs(); } ); } );
+
+      $( document ).on( 'click', '.wab-job-page', function () {
+        App.s.jobPage = parseInt( $( this ).data( 'page' ), 10 ) || 1;
+        App.loadJobs();
+      } );
+    },
+
+    loadJobs: function ( quiet ) {
+      if ( ! quiet ) { $( '#wab-jobs' ).html( '<p class="wab-muted">Loading…</p>' ); }
+
+      this.post( 'wab_jobs', { status: this.s.jobStatus, page: this.s.jobPage } ).done( function ( r ) {
+        if ( ! r || ! r.success ) { return; }
+
+        // Keep the header tiles honest while we are here.
+        App.post( 'wab_status' ).done( function ( s ) {
+          if ( ! s || ! s.success ) { return; }
+          var c = s.data.counts;
+          $( '#wab-queued' ).text( c.queued );
+          $( '#wab-processing' ).text( c.processing );
+          $( '#wab-done' ).text( c.done );
+          $( '#wab-failed' ).text( c.failed );
+        } );
+
+        var jobs = r.data.jobs || [];
+        if ( ! jobs.length ) {
+          $( '#wab-jobs' ).html(
+            '<p class="wab-empty">Nothing here. Open a sheet, tick some rows, and press ' +
+            '<strong>Generate</strong>.<br><a href="' + App.esc( WAB.sheetsUrl ) + '">Go to Sheets →</a></p>'
+          );
+          return;
+        }
+
+        var h = '<table class="wab-table"><thead><tr>' +
+                '<th>#</th><th>Result</th><th>State</th><th>Tries</th><th>Cost</th><th>Detail</th><th></th>' +
+                '</tr></thead><tbody>';
+
+        jobs.forEach( function ( j ) {
+          h += '<tr><td class="wab-muted">' + App.esc( j.row_index ) + '</td><td>';
+          if ( j.result_post_id && j.edit_url ) {
+            h += '<a href="' + App.esc( j.edit_url ) + '"><strong>' +
+                 App.esc( j.title || ( '#' + j.result_post_id ) ) + '</strong></a>';
+            if ( j.view_url ) { h += ' <a href="' + App.esc( j.view_url ) + '" target="_blank" rel="noopener" title="View">↗</a>'; }
+          } else { h += '<span class="wab-muted">—</span>'; }
+          h += '</td>';
+
+          h += '<td><span class="wab-pill wab-pill-' + App.esc( j.status ) + '">' + App.esc( j.status ) + '</span></td>';
+          h += '<td class="wab-muted">' + App.esc( j.attempts ) + '</td>';
+          h += '<td>' + App.esc( App.money( j.cost_usd ) ) + '</td>';
+          h += '<td class="wab-detail">' + App.esc( j.error_message || '' ) + '</td><td>';
+
+          if ( j.status === 'failed' || j.status === 'cancelled' ) {
+            h += '<button class="button-link wab-retry" data-job="' + App.esc( j.job_id ) + '">Retry</button>';
+          } else if ( j.status === 'queued' ) {
+            h += '<button class="button-link wab-cancel" data-job="' + App.esc( j.job_id ) + '">Cancel</button>';
+          }
+          h += '</td></tr>';
+        } );
+
+        h += '</tbody></table>';
+
+        var pages = Math.ceil( r.data.total / r.data.per_page );
+        if ( pages > 1 ) {
+          h += '<div class="wab-pager">';
+          for ( var p = 1; p <= Math.min( pages, 30 ); p++ ) {
+            h += '<button class="wab-page wab-job-page' + ( p === r.data.page ? ' is-active' : '' ) +
+                 '" data-page="' + p + '">' + p + '</button>';
+          }
+          h += '</div>';
+        }
+
+        $( '#wab-jobs' ).html( h );
+      } );
+    },
+
+    // ===========================================================
+    // Import page
+    // ===========================================================
+    bindImport: function () {
+      $( '#wab-mode' ).on( 'change', function () {
+        var w = $( this ).find( ':selected' ).data( 'words' );
+        $( '#wab-mode-note' ).text( w ? ( 'About ' + w + ' words per page.' ) : '' );
+      } ).trigger( 'change' );
+
+      $( '#wab-file' ).on( 'change', function () {
         var file = this.files && this.files[ 0 ];
         if ( ! file ) { return; }
 
@@ -89,348 +298,139 @@
         fd.append( 'nonce', WAB.nonce );
         fd.append( 'file', file );
 
-        App.notify( '#wab-upload-status', 'Reading ' + file.name + '…', 'info' );
+        App.say( '#wab-upload-status', 'Reading ' + App.esc( file.name ) + '…', 'info' );
+        $( '#wab-dropzone' ).addClass( 'is-busy' );
 
-        $.ajax( {
-          url: WAB.ajax, method: 'POST', data: fd, processData: false, contentType: false
-        } ).done( function ( r ) {
-          if ( ! r || ! r.success ) {
-            App.notify( '#wab-upload-status', ( r && r.data && r.data.message ) || WAB.i18n.genericError, 'error' );
-            return;
-          }
-          App.state.uploadKey = r.data.key;
-          App.notify( '#wab-upload-status', 'Found ' + r.data.total_rows + ' rows.', 'ok' );
-          App.renderMapper( r.data );
-          $( '#wab-commit' ).prop( 'disabled', false );
-        } ).fail( function () {
-          App.notify( '#wab-upload-status', 'Upload failed.', 'error' );
-        } );
+        $.ajax( { url: WAB.ajax, method: 'POST', data: fd, processData: false, contentType: false } )
+          .done( function ( r ) {
+            $( '#wab-dropzone' ).removeClass( 'is-busy' );
+            if ( ! r || ! r.success ) {
+              App.say( '#wab-upload-status', App.esc( ( r && r.data && r.data.message ) || WAB.i18n.genericError ), 'error' );
+              return;
+            }
+            App.s.uploadKey = r.data.key;
+            App.say( '#wab-upload-status',
+              '<strong>' + r.data.total_rows + ' rows</strong> found in ' + App.esc( file.name ) + '.', 'ok' );
+            App.renderMapper( r.data );
+            $( '#wab-h-map' ).removeClass( 'wab-h-muted' );
+            $( '#wab-dropzone' ).addClass( 'is-done' );
+            $( '#wab-commit' ).prop( 'disabled', false );
+          } )
+          .fail( function () {
+            $( '#wab-dropzone' ).removeClass( 'is-busy' );
+            App.say( '#wab-upload-status', 'Upload failed. The file may be too large for this server.', 'error' );
+          } );
       } );
 
-      $( document ).on( 'click', '#wab-commit', function () {
+      $( '#wab-commit' ).on( 'click', function () {
         var map = {};
         $( '#wab-mapper select' ).each( function () {
           var f = $( this ).data( 'field' );
           if ( f && this.value ) { map[ f ] = this.value; }
         } );
 
-        $( this ).prop( 'disabled', true );
+        var $btn = $( this ).prop( 'disabled', true ).text( 'Importing…' );
 
         App.post( 'wab_commit', {
-          key: App.state.uploadKey,
+          key: App.s.uploadKey,
           column_map: map,
-          post_type: $( '.wab-switch-opt.is-active' ).data( 'post-type' ) || 'page',
+          post_type: $( '#wab-post-type' ).val(),
           content_mode: $( '#wab-mode' ).val(),
           image_source: $( '#wab-image-source' ).val(),
           generation_mode: $( '#wab-generation-mode' ).val()
         } ).done( function ( r ) {
           if ( ! r || ! r.success ) {
-            App.notify( '#wab-upload-status', ( r && r.data && r.data.message ) || WAB.i18n.genericError, 'error' );
-            $( '#wab-commit' ).prop( 'disabled', false );
+            App.say( '#wab-upload-status', App.esc( ( r && r.data && r.data.message ) || WAB.i18n.genericError ), 'error' );
+            $btn.prop( 'disabled', false ).text( 'Import rows' );
             return;
           }
-          App.state.importId = r.data.import_id;
-          App.notify( '#wab-upload-status', r.data.message + ' Estimated cost ' + App.money( r.data.estimate ) + '.', 'ok' );
-          $( '#wab-preview-images' ).prop( 'hidden', false );
-          $( '#wab-commit' ).text( 'Queue generation' ).prop( 'disabled', false ).data( 'stage', 'queue' );
-          App.refresh();
-        } );
-      } );
 
-      // Second press queues.
-      $( document ).on( 'click', '#wab-commit[data-stage="queue"]', function ( e ) {
-        e.stopImmediatePropagation();
-        var $btn = $( this ).prop( 'disabled', true );
-
-        App.post( 'wab_queue', { import_id: App.state.importId } ).done( function ( r ) {
-          if ( ! r || ! r.success ) {
-            App.notify( '#wab-upload-status', ( r && r.data && r.data.message ) || WAB.i18n.genericError, 'error' );
-            $btn.prop( 'disabled', false );
-            return;
-          }
-          App.notify( '#wab-upload-status', r.data.message, 'ok' );
-          App.refresh();
-        } );
-      } );
-
-      $( document ).on( 'click', '#wab-preview-images', function () {
-        App.notify( '#wab-preview-result', 'Testing library matches…', 'info' );
-
-        App.post( 'wab_preview_image', { import_id: App.state.importId, limit: 5 } ).done( function ( r ) {
-          if ( ! r || ! r.success ) { App.notify( '#wab-preview-result', WAB.i18n.genericError, 'error' ); return; }
-
-          var html = '<p><strong>' + r.data.hit_rate + '% matched</strong> from your existing library — ' +
-                     'revised estimate ' + App.esc( App.money( r.data.estimate ) ) + ' per page.</p><ul class="wab-preview-list">';
-
-          $.each( r.data.previews, function ( i, p ) {
-            html += '<li>';
-            if ( p.matched ) {
-              html += '<img src="' + App.esc( p.url ) + '" alt="" width="48" height="48">';
-              html += '<span><strong>' + App.esc( p.row ) + '</strong><br>' + App.esc( p.title ) + '</span>';
-            } else {
-              html += '<span class="wab-miss">✕</span><span><strong>' + App.esc( p.row ) + '</strong><br>' + App.esc( p.reason ) + '</span>';
-            }
-            html += '</li>';
-          } );
-
-          $( '#wab-preview-result' ).attr( 'class', 'wab-status wab-status-ok' ).html( html + '</ul>' );
+          // Straight to the sheet, which is where the next real decision happens.
+          window.location = WAB.sheetsUrl + '&import_id=' + encodeURIComponent( r.data.import_id );
         } );
       } );
     },
 
-    renderMapper: function ( data ) {
-      var html = '<p class="wab-hint">Confirm column mapping. Auto-detected values are pre-selected.</p><div class="wab-map-grid">';
+    renderMapper: function ( d ) {
+      var h = '<p class="wab-hint">Detected columns are pre-selected. Set anything you do not want to <em>skip</em>.</p>' +
+              '<div class="wab-map-grid">';
 
-      $.each( data.fields, function ( field, label ) {
-        html += '<div class="wab-map-row"><label>' + App.esc( label ) + '</label><select data-field="' + App.esc( field ) + '">';
-        html += '<option value="">— skip —</option>';
-
-        $.each( data.headers, function ( i, h ) {
-          var sel = ( data.auto_map[ field ] === h ) ? ' selected' : '';
-          html += '<option value="' + App.esc( h ) + '"' + sel + '>' + App.esc( h ) + '</option>';
+      $.each( d.fields, function ( field, label ) {
+        h += '<div class="wab-map-row"><label>' + App.esc( label ) + '</label>' +
+             '<select data-field="' + App.esc( field ) + '"><option value="">— skip —</option>';
+        d.headers.forEach( function ( head ) {
+          h += '<option value="' + App.esc( head ) + '"' +
+               ( d.auto_map[ field ] === head ? ' selected' : '' ) + '>' + App.esc( head ) + '</option>';
         } );
-
-        html += '</select></div>';
+        h += '</select></div>';
       } );
 
-      $( '#wab-mapper' ).html( html + '</div>' ).prop( 'hidden', false );
+      $( '#wab-mapper' ).html( h + '</div>' );
     },
 
-    // -----------------------------------------------------------
-    // Ops
-    // -----------------------------------------------------------
-    bindOps: function () {
-      $( document ).on( 'click', '#wab-pause',  function () { App.post( 'wab_pause'  ).done( function () { location.reload(); } ); } );
-      $( document ).on( 'click', '#wab-resume', function () { App.post( 'wab_resume' ).done( function () { location.reload(); } ); } );
-
-      $( document ).on( 'click', '#wab-run-now', function () {
-        var $b = $( this ).prop( 'disabled', true ).text( 'Running…' );
-        App.post( 'wab_run_now' ).always( function () {
-          $b.prop( 'disabled', false ).text( 'Run now' );
-          App.refresh();
-        } );
-      } );
-
-      $( document ).on( 'click', '#wab-drain', function () {
-        if ( ! window.confirm( WAB.i18n.confirmDrain ) ) { return; }
-        App.post( 'wab_drain' ).done( function () { App.refresh(); } );
-      } );
-
-      $( document ).on( 'click', '.wab-chip[data-status]', function () {
-        $( '.wab-chip[data-status]' ).removeClass( 'is-active' );
-        $( this ).addClass( 'is-active' );
-        App.state.status = $( this ).data( 'status' );
-        App.state.page = 1;
-        App.loadJobs();
-      } );
-
-      $( document ).on( 'click', '.wab-retry', function () {
-        App.post( 'wab_retry', { job_id: $( this ).data( 'job' ) } ).done( function () { App.loadJobs(); } );
-      } );
-
-      $( document ).on( 'click', '.wab-cancel', function () {
-        App.post( 'wab_cancel', { job_id: $( this ).data( 'job' ) } ).done( function () { App.loadJobs(); } );
-      } );
-
-      $( document ).on( 'click', '.wab-import-pick', function () {
-        App.state.importId = $( this ).data( 'import' );
-        App.state.page = 1;
-        App.loadJobs();
-      } );
-    },
-
-    refresh: function () {
-      this.post( 'wab_status', { import_id: this.state.importId } ).done( function ( r ) {
-        if ( ! r || ! r.success ) { return; }
-        var c = r.data.counts;
-        $( '#wab-queued' ).text( c.queued );
-        $( '#wab-processing' ).text( c.processing );
-        $( '#wab-done' ).text( c.done );
-        $( '#wab-failed' ).text( c.failed );
-        $( '#wab-per-item' ).text( App.money( r.data.estimate ) );
-      } );
-
-      this.loadImports();
-      this.loadJobs();
-    },
-
-    loadImports: function () {
-      this.post( 'wab_imports' ).done( function ( r ) {
-        if ( ! r || ! r.success ) { return; }
-        if ( ! r.data.imports || ! r.data.imports.length ) {
-          $( '#wab-imports' ).html( '<p class="wab-muted">No imports yet.</p>' );
-          return;
-        }
-
-        var html = '';
-        $.each( r.data.imports, function ( i, imp ) {
-          var c = imp.counts, total = c.total || imp.total_rows;
-          var pct = total ? Math.round( ( c.done / total ) * 100 ) : 0;
-
-          html += '<div class="wab-import' + ( imp.import_id === App.state.importId ? ' is-active' : '' ) + '">';
-          html += '<button class="wab-import-pick" data-import="' + App.esc( imp.import_id ) + '">';
-          html += '<strong>' + App.esc( imp.filename ) + '</strong>';
-          html += '<span class="wab-badge">' + App.esc( imp.post_type ) + '</span>';
-          html += '<span class="wab-badge">' + App.esc( imp.content_mode ) + '</span>';
-          html += '<div class="wab-bar"><span style="width:' + pct + '%"></span></div>';
-          html += '<small>' + c.done + ' / ' + total + ' done';
-          if ( c.failed ) { html += ' · ' + c.failed + ' failed'; }
-          html += '</small></button></div>';
-        } );
-
-        $( '#wab-imports' ).html( html );
-      } );
-    },
-
-    loadJobs: function () {
-      this.post( 'wab_jobs', {
-        import_id: this.state.importId, status: this.state.status, page: this.state.page
-      } ).done( function ( r ) {
-        if ( ! r || ! r.success ) { return; }
-
-        if ( ! r.data.jobs.length ) {
-          $( '#wab-jobs' ).html( '<p class="wab-muted">Nothing here.</p>' );
-          return;
-        }
-
-        var html = '<table class="wab-table"><thead><tr>' +
-          '<th>#</th><th>Result</th><th>Status</th><th>Tries</th><th>Cost</th><th>Detail</th><th></th>' +
-          '</tr></thead><tbody>';
-
-        $.each( r.data.jobs, function ( i, j ) {
-          html += '<tr>';
-          html += '<td>' + App.esc( j.row_index ) + '</td>';
-
-          html += '<td>';
-          if ( j.result_post_id && j.edit_url ) {
-            html += '<a href="' + App.esc( j.edit_url ) + '">' + App.esc( j.title || ( '#' + j.result_post_id ) ) + '</a>';
-            if ( j.view_url ) { html += ' <a href="' + App.esc( j.view_url ) + '" target="_blank" rel="noopener">↗</a>'; }
-          } else {
-            html += '<span class="wab-muted">—</span>';
-          }
-          html += '</td>';
-
-          html += '<td><span class="wab-pill wab-pill-' + App.esc( j.status ) + '">' + App.esc( j.status ) + '</span></td>';
-          html += '<td>' + App.esc( j.attempts ) + '</td>';
-          html += '<td>' + App.esc( App.money( j.cost_usd ) ) + '</td>';
-          html += '<td class="wab-detail">' + App.esc( j.error_message || '' ) + '</td>';
-
-          html += '<td>';
-          if ( j.status === 'failed' || j.status === 'cancelled' ) {
-            html += '<button class="button-link wab-retry" data-job="' + App.esc( j.job_id ) + '">Retry</button>';
-          } else if ( j.status === 'queued' ) {
-            html += '<button class="button-link wab-cancel" data-job="' + App.esc( j.job_id ) + '">Cancel</button>';
-          }
-          html += '</td></tr>';
-        } );
-
-        html += '</tbody></table>';
-
-        var pages = Math.ceil( r.data.total / r.data.per_page );
-        if ( pages > 1 ) {
-          html += '<div class="wab-pager">';
-          for ( var p = 1; p <= Math.min( pages, 20 ); p++ ) {
-            html += '<button class="wab-page' + ( p === r.data.page ? ' is-active' : '' ) + '" data-page="' + p + '">' + p + '</button>';
-          }
-          html += '</div>';
-        }
-
-        $( '#wab-jobs' ).html( html );
-      } );
-    },
-
-    // -----------------------------------------------------------
-    // Settings
-    // -----------------------------------------------------------
+    // ===========================================================
+    // Settings page
+    // ===========================================================
     bindSettings: function () {
-      var $state = $( '#wab-settings-state' );
-      if ( ! $state.length ) { return; }
-
       var cfg;
-      try { cfg = JSON.parse( $state.text() ); } catch ( e ) { return; }
+      try { cfg = JSON.parse( $( '#wab-settings-state' ).text() ); } catch ( e ) { return; }
 
-      function fillModels( $select, models, selected, $note ) {
-        var html = '';
+      function fill( $sel, models, chosen, $note ) {
+        var h = '';
         $.each( models, function ( id, m ) {
-          html += '<option value="' + App.esc( id ) + '"' + ( id === selected ? ' selected' : '' ) + '>' +
-                  App.esc( m.label ) + '</option>';
+          h += '<option value="' + App.esc( id ) + '"' + ( id === chosen ? ' selected' : '' ) + '>' +
+               App.esc( m.label ) + '</option>';
         } );
-        $select.html( html );
-
-        function note() {
-          var m = models[ $select.val() ];
-          $note.text( m ? m.notes : '' );
-        }
-        $select.off( 'change.note' ).on( 'change.note', note );
+        $sel.html( h );
+        function note() { var m = models[ $sel.val() ]; $note.text( m ? m.notes : '' ); }
+        $sel.off( 'change.n' ).on( 'change.n', note );
         note();
       }
 
-      function syncText() {
-        var p = $( '#wab_text_provider' ).val();
-        fillModels( $( '#wab_text_model' ), cfg.text_models[ p ] || {}, cfg.selected.text_model, $( '#wab-text-model-note' ) );
-      }
-
-      function syncImage() {
-        var p = $( '#wab_image_provider' ).val();
-        fillModels( $( '#wab_fal_model' ), cfg.image_models[ p ] || {}, cfg.selected.fal_model, $( '#wab-image-model-note' ) );
-      }
+      function syncText()  { fill( $( '#wab_text_model' ), cfg.text_models[ $( '#wab_text_provider' ).val() ] || {}, cfg.selected.text_model, $( '#wab-text-model-note' ) ); }
+      function syncImage() { fill( $( '#wab_fal_model' ), cfg.image_models[ $( '#wab_image_provider' ).val() ] || {}, cfg.selected.fal_model, $( '#wab-image-model-note' ) ); }
 
       $( '#wab_text_provider' ).on( 'change', syncText );
       $( '#wab_image_provider' ).on( 'change', syncImage );
-      syncText();
-      syncImage();
+      syncText(); syncImage();
 
       $( '#wab-settings-form' ).on( 'submit', function ( e ) {
         e.preventDefault();
-
         var settings = {};
         $( this ).find( '[name]' ).each( function () {
-          if ( this.disabled ) { return; } // Constant-backed keys.
+          if ( this.disabled ) { return; }
           settings[ this.name ] = ( this.type === 'checkbox' ) ? ( this.checked ? '1' : '0' ) : this.value;
         } );
 
         $( '#wab-save-msg' ).text( 'Saving…' );
-
         App.post( 'wab_save_settings', { settings: settings } ).done( function ( r ) {
-          if ( r && r.success ) {
-            $( '#wab-save-msg' ).text( r.data.message );
-            // Clear key fields so a mask is never resubmitted as a value.
-            $( 'input[type="password"]' ).val( '' );
-          } else {
-            $( '#wab-save-msg' ).text( ( r && r.data && r.data.message ) || WAB.i18n.genericError );
-          }
+          $( '#wab-save-msg' ).text( ( r && r.data && r.data.message ) || WAB.i18n.genericError );
+          $( 'input[type="password"]' ).val( '' );
         } );
       } );
 
       $( '#wab-export' ).on( 'click', function () {
         App.post( 'wab_export' ).done( function ( r ) {
           if ( ! r || ! r.success ) { return; }
-          var blob = new Blob( [ JSON.stringify( r.data.config, null, 2 ) ], { type: 'application/json' } );
-          var a = document.createElement( 'a' );
-          a.href = URL.createObjectURL( blob );
+          var b = new Blob( [ JSON.stringify( r.data.config, null, 2 ) ], { type: 'application/json' } ),
+              a = document.createElement( 'a' );
+          a.href = URL.createObjectURL( b );
           a.download = 'wonder-ai-config.json';
-          document.body.appendChild( a );
-          a.click();
-          document.body.removeChild( a );
+          document.body.appendChild( a ); a.click(); document.body.removeChild( a );
           URL.revokeObjectURL( a.href );
         } );
       } );
 
       $( '#wab-import' ).on( 'click', function () {
-        var json = window.prompt( 'Paste exported configuration JSON:' );
-        if ( ! json ) { return; }
-        App.post( 'wab_import_config', { config: json } ).done( function ( r ) {
+        var j = window.prompt( 'Paste exported configuration JSON:' );
+        if ( ! j ) { return; }
+        App.post( 'wab_import_config', { config: j } ).done( function ( r ) {
           window.alert( ( r && r.data && r.data.message ) || WAB.i18n.genericError );
           if ( r && r.success ) { location.reload(); }
         } );
       } );
     }
   };
-
-  $( document ).on( 'click', '.wab-page', function () {
-    App.state.page = parseInt( $( this ).data( 'page' ), 10 ) || 1;
-    App.loadJobs();
-  } );
 
   $( function () { App.init(); } );
 
