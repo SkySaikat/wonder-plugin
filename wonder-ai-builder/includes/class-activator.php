@@ -43,7 +43,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class WAB_Activator {
 
     /** Bump to trigger dbDelta on upgrade. v3 adds economy batch mode. */
-    const DB_VERSION = '3';
+    const DB_VERSION = '4';
 
     public static function activate() {
         self::create_tables();
@@ -175,7 +175,8 @@ class WAB_Activator {
         // Columns the runtime depends on, per table.
         $required_columns = array(
             'wab_jobs' => array( 'payload', 'batch_id', 'attachment_id', 'locked_until', 'attempts', 'cost_usd' ),
-            'wab_rows' => array( 'schema_markup', 'schema_type', 'post_type', 'price' ),
+            'wab_rows'    => array( 'schema_markup', 'schema_type', 'post_type', 'price', 'word_count' ),
+            'wab_imports' => array( 'target_words' ),
         );
 
         foreach ( $required_columns as $table => $cols ) {
@@ -218,6 +219,7 @@ class WAB_Activator {
             post_type varchar(20) NOT NULL default 'page',
             content_mode varchar(20) NOT NULL default 'hybrid',
             image_source varchar(30) NOT NULL default 'library_then_ai',
+            target_words int(11) NOT NULL default 0,
             created_by bigint(20) unsigned NOT NULL default 0,
             created_at datetime NOT NULL default '0000-00-00 00:00:00',
             PRIMARY KEY  (id),
@@ -244,6 +246,7 @@ class WAB_Activator {
             category varchar(255) NOT NULL default '',
             internal_link varchar(500) NOT NULL default '',
             scheduled_date varchar(50) NOT NULL default '',
+            word_count int(11) NOT NULL default 0,
             description text,
             image_rules text,
             schema_markup longtext,
@@ -374,6 +377,8 @@ class WAB_Activator {
         $defaults = array(
             // Providers
             'wab_text_provider'    => 'gemini',
+            // gemini-2.5-* are retired for new API keys; verified live.
+            'wab_text_model'       => 'gemini-flash-latest',
             'wab_image_provider'   => 'fal',
             'wab_fal_model'        => 'fal-ai/flux/schnell',
 
@@ -384,6 +389,7 @@ class WAB_Activator {
             'wab_generation_mode'  => 'standard',
             'wab_image_source'     => 'library_then_ai',
             'wab_content_mode'     => 'hybrid',
+            'wab_target_words'     => 0,   // 0 = use the depth preset
             'wab_daily_budget_usd' => 0,
             'wab_image_unit_cost'  => 0.003,
             'wab_text_out_price'   => 2.50,
@@ -398,7 +404,7 @@ class WAB_Activator {
             // Content defaults
             'wab_default_status'   => 'draft',
             'wab_post_type'        => 'page',
-            'wab_schema_type'      => 'auto',
+            'wab_schema_type'      => 'csv_only',
             'wab_enable_faq'       => 1,
 
             // Ops

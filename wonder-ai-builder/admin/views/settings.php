@@ -155,6 +155,12 @@ define( 'WAB_ANTHROPIC_API_KEY', '…' );</code></pre>
           <p class="wab-hint"><?php esc_html_e( '0 = unlimited. The queue pauses itself when reached.', 'wonder-ai-builder' ); ?></p>
         </div>
         <div class="wab-field">
+          <label class="wab-label" for="wab_target_words"><?php esc_html_e( 'Default word count', 'wonder-ai-builder' ); ?></label>
+          <input type="number" min="0" max="4000" step="50" id="wab_target_words" name="wab_target_words" class="wab-input"
+                 value="<?php echo esc_attr( (int) ( $opt['wab_target_words'] ?? 0 ) ); ?>">
+          <p class="wab-hint"><?php esc_html_e( '0 = use the depth preset chosen per sheet. Any value here applies site-wide unless a sheet or row overrides it.', 'wonder-ai-builder' ); ?></p>
+        </div>
+        <div class="wab-field">
           <label class="wab-label" for="wab_jobs_per_tick"><?php esc_html_e( 'Pages per minute', 'wonder-ai-builder' ); ?></label>
           <input type="number" min="1" max="25" id="wab_jobs_per_tick" name="wab_jobs_per_tick" class="wab-input"
                  value="<?php echo esc_attr( (int) $opt['wab_jobs_per_tick'] ); ?>">

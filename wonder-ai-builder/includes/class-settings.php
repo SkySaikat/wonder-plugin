@@ -45,6 +45,7 @@ class WAB_Settings {
             'wab_jobs_per_tick'    => 'int',
             'wab_load_threshold'   => 'float',
             'wab_min_words'        => 'int',
+            'wab_target_words'     => 'int',
             'wab_inline_images'    => 'int',
             'wab_image_width'      => 'int',
             'wab_image_height'     => 'int',

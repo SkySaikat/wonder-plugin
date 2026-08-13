@@ -79,7 +79,7 @@ class WAB_Text_OpenAI implements WAB_Text_Provider_Interface, WAB_Batch_Provider
             return new WP_Error( 'wab_empty_content', __( 'OpenAI returned no content.', 'wonder-ai-builder' ) );
         }
 
-        $data = json_decode( WAB_Content_Sanitizer::strip_code_fences( $text ), true );
+        $data = WAB_Content_Sanitizer::decode_json( $text );
         if ( ! is_array( $data ) ) {
             return new WP_Error( 'wab_bad_json', __( 'OpenAI returned unparseable JSON.', 'wonder-ai-builder' ) );
         }
@@ -337,7 +337,7 @@ class WAB_Text_OpenAI implements WAB_Text_Provider_Interface, WAB_Batch_Provider
                 continue;
             }
 
-            $data = json_decode( WAB_Content_Sanitizer::strip_code_fences( $text ), true );
+            $data = WAB_Content_Sanitizer::decode_json( $text );
             if ( ! is_array( $data ) ) {
                 $out[ $job_key ] = array( 'error' => 'Unparseable JSON in batch response.' );
                 continue;

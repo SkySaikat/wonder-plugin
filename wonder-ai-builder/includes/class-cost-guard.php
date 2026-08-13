@@ -155,6 +155,9 @@ class WAB_Cost_Guard {
             // image, e.g. an unsupported parameter for that model. Retrying re-bills
             // the text call for a guaranteed-identical outcome.
             'wab_fal_no_image',
+            // Truncation repeats identically under the same settings, so a
+            // retry only re-bills. The operator must lower Content depth.
+            'wab_truncated',
             'wab_bad_request',
         );
         if ( in_array( $code, $permanent, true ) ) {

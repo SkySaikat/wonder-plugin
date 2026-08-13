@@ -38,6 +38,7 @@ class WAB_Importer {
             'category'       => __( 'Category', 'wonder-ai-builder' ),
             'internal_link'  => __( 'Internal link hint', 'wonder-ai-builder' ),
             'scheduled_date' => __( 'Scheduled date', 'wonder-ai-builder' ),
+            'word_count'     => __( 'Words (length for this row)', 'wonder-ai-builder' ),
             'description'    => __( 'Brief / description', 'wonder-ai-builder' ),
             'image_rules'    => __( 'Image rules', 'wonder-ai-builder' ),
             'schema_markup'  => __( 'Schema (raw JSON-LD)', 'wonder-ai-builder' ),
@@ -171,6 +172,7 @@ class WAB_Importer {
             'post_type'    => $post_type,
             'content_mode' => $content_mode,
             'image_source' => $image_source,
+            'target_words' => isset( $_POST['target_words'] ) ? max( 0, min( 4000, (int) $_POST['target_words'] ) ) : 0,
             'created_by'   => get_current_user_id(),
             'created_at'   => current_time( 'mysql' ),
         ) );
@@ -191,9 +193,14 @@ class WAB_Importer {
 
                 // schema_markup holds raw JSON-LD and must NOT be run through
                 // sanitize_textarea_field, which would mangle quotes and braces.
-                $data[ $field ] = ( $field === 'schema_markup' )
-                    ? trim( $value )
-                    : sanitize_textarea_field( $value );
+                if ( $field === 'schema_markup' ) {
+                    $data[ $field ] = trim( $value );          // raw JSON-LD
+                } elseif ( $field === 'word_count' ) {
+                    // Tolerate "800 words", "~800", "1,200".
+                    $data[ $field ] = (int) preg_replace( '/[^0-9]/', '', $value );
+                } else {
+                    $data[ $field ] = sanitize_textarea_field( $value );
+                }
             }
 
             // Derive a title when none was supplied.
@@ -543,6 +550,7 @@ class WAB_Importer {
             'category'       => array( 'category', 'cat', 'taxonomy' ),
             'internal_link'  => array( 'internal link', 'link hint' ),
             'scheduled_date' => array( 'scheduled', 'publish date', 'date' ),
+            'word_count'     => array( 'words', 'word count', 'wordcount', 'length', 'target words' ),
             'description'    => array( 'description', 'brief', 'summary', 'desc' ),
             'image_rules'    => array( 'image', 'image rules', 'image brief' ),
             'schema_markup'  => array( 'schema', 'json-ld', 'jsonld', 'structured data', 'schema markup' ),

@@ -341,20 +341,38 @@ against each section&rsquo;s own H2, so the picture suits the section it sits in
 
 <h2 id="depth">Content depth</h2>
 <table>
-  <thead><tr><th>Option</th><th>Words</th><th class="num">Text cost</th><th>Best for</th></tr></thead>
+  <thead><tr><th>Option</th><th>Words</th><th>Sections</th><th>Best for</th></tr></thead>
   <tbody>
-    <tr><td>A &mdash; Template + local intro</td><td>~150</td><td class="num">$0.001</td><td>500+ low-competition locations</td></tr>
-    <tr><td><strong>B &mdash; Hybrid sectional</strong></td><td>~450</td><td class="num best">$0.003</td><td><strong>Recommended.</strong> 100&ndash;500 locations</td></tr>
-    <tr><td>C &mdash; Full unique body</td><td>~900</td><td class="num">$0.007</td><td>Competitive metros, money pages</td></tr>
-    <tr><td>D &mdash; Pillar / cluster parent</td><td>~1800</td><td class="num">$0.013</td><td>Authority hubs</td></tr>
+    <tr><td>Short &mdash; intro only</td><td>~250</td><td>2</td><td>500+ low-competition locations</td></tr>
+    <tr><td><strong>Standard &mdash; balanced</strong></td><td>~700</td><td>4</td><td><strong>Recommended.</strong> 100&ndash;500 locations</td></tr>
+    <tr><td>Long &mdash; in-depth</td><td>~1,300</td><td>8</td><td>Competitive metros, money pages</td></tr>
+    <tr><td>Pillar &mdash; comprehensive</td><td>~2,200</td><td>13</td><td>Authority hubs</td></tr>
   </tbody>
 </table>
-<p><strong>Why B, and it is an SEO argument rather than a cost one.</strong> Google&rsquo;s helpful-content
-systems penalise near-duplicate doorway pages. A is templated enough to look like one at scale. C costs
-2.3&times; for quality gains that do not move rankings on low-competition location terms. B keeps the
-genuinely local content unique and shares only the boilerplate that was never going to rank.</p>
-<p>B also <em>rotates page structure</em> across a location set &mdash; a different opening angle per row,
-distributed evenly &mdash; so 100 pages do not fingerprint as a farm. That rotation is computed in PHP, free.</p>
+
+<h3>Setting the length</h3>
+<p>Four places can decide how long a page is. The most specific one wins:</p>
+<table>
+  <thead><tr><th>#</th><th>Where</th><th>Scope</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>A <code>Words</code> column in the spreadsheet</td><td>That one row</td></tr>
+    <tr><td>2</td><td>Import screen &rarr; <em>Exact word count</em></td><td>Every row in that sheet</td></tr>
+    <tr><td>3</td><td>Settings &rarr; <em>Default word count</em></td><td>Every sheet on the site</td></tr>
+    <tr><td>4</td><td>The depth preset above</td><td>Fallback when all three are blank or 0</td></tr>
+  </tbody>
+</table>
+<p>Anything from 120 to 4,000 words is accepted and applies to pages and posts alike, in both Standard and
+Economy mode. The number you type is a <em>floor</em>, not a ceiling: the prompt states an explicit minimum and a
+per-section word budget, because a model given an approximate target treats it as an upper bound and stops
+early &mdash; asking for &ldquo;~450 words&rdquo; measurably produced 303. Expect to land on or slightly above the
+figure you ask for.</p>
+<p><strong>Why Standard, and it is an SEO argument rather than a cost one.</strong> Google&rsquo;s helpful-content
+systems penalise near-duplicate doorway pages. Short is templated enough to look like one at scale. Long costs
+roughly twice as much for quality gains that do not move rankings on low-competition location terms. Standard
+keeps the genuinely local content unique and shares only the boilerplate that was never going to rank.</p>
+<p>Every depth except Short also <em>rotates page structure</em> across a location set &mdash; a different opening
+angle per row, distributed evenly &mdash; so 100 pages do not fingerprint as a farm. That rotation is computed in
+PHP, free.</p>
 
 <h2 id="cost">Cost reference</h2>
 <p>Per page, depth B, library images:</p>

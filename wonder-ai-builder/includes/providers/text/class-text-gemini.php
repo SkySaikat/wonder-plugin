@@ -41,36 +41,65 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
         return (string) get_option( self::KEY_OPTION, '' );
     }
 
+    /**
+     * Selectable models.
+     *
+     * VERIFIED LIVE. Every Gemini 2.5 model now returns
+     *   404 "This model is no longer available to new users"
+     * for newly-issued API keys — including gemini-2.5-flash, -flash-lite and -pro.
+     * Shipping those as the default meant a brand-new install could not generate at
+     * all. Note the models list endpoint still ADVERTISES them; the restriction is
+     * only enforced at call time, so listing is not a safe capability check.
+     *
+     * 'gemini-flash-latest' is the default deliberately: it is an alias Google keeps
+     * pointed at the current Flash generation, so it cannot rot the way a pinned
+     * version just did.
+     *
+     * Prices are USD per 1M tokens and are configurable — treat them as estimates and
+     * confirm against your own billing.
+     */
     public function get_models() {
         return array(
-            'gemini-2.5-flash' => array(
-                'label' => 'Gemini 2.5 Flash — best value',
+            'gemini-flash-latest' => array(
+                'label' => 'Gemini Flash (latest) — recommended',
                 'in'    => 0.30,
                 'out'   => 2.50,
-                'notes' => 'Recommended. Strong long-form quality at low output cost.',
+                'notes' => 'Alias that always points at the current Flash model, so it will not be retired under you. Verified working.',
+            ),
+            'gemini-3.6-flash' => array(
+                'label' => 'Gemini 3.6 Flash',
+                'in'    => 0.30,
+                'out'   => 2.50,
+                'notes' => 'Pinned version. Use when you need output to stay identical over time. Verified working.',
+            ),
+            'gemini-3.5-flash' => array(
+                'label' => 'Gemini 3.5 Flash',
+                'in'    => 0.30,
+                'out'   => 2.50,
+                'notes' => 'Previous generation, pinned. Verified working.',
+            ),
+            'gemini-3.1-flash-lite' => array(
+                'label' => 'Gemini 3.1 Flash-Lite — cheapest, no thinking',
+                'in'    => 0.10,
+                'out'   => 0.40,
+                'notes' => 'Performs no thinking, so the whole token budget goes to output and cost is far lower. Thinner prose — good for Template depth. Verified working.',
             ),
             'gemini-3-flash-preview' => array(
                 'label' => 'Gemini 3 Flash (preview)',
-                'in'    => 0.50,
-                'out'   => 3.00,
-                'notes' => 'Newer reasoning. Preview pricing may change.',
-            ),
-            'gemini-2.5-flash-lite' => array(
-                'label' => 'Gemini 2.5 Flash-Lite — cheapest',
-                'in'    => 0.10,
-                'out'   => 0.40,
-                'notes' => 'Lowest cost. Suitable for Template mode intros; thin for full bodies.',
+                'in'    => 0.30,
+                'out'   => 2.50,
+                'notes' => 'Preview channel; pricing and behaviour may change. Verified working.',
             ),
         );
     }
 
     public function get_pricing( $model = '' ) {
         $models = $this->get_models();
-        $model  = $model ?: get_option( 'wab_text_model', 'gemini-2.5-flash' );
+        $model  = $model ?: get_option( 'wab_text_model', 'gemini-flash-latest' );
         if ( isset( $models[ $model ] ) ) {
             return array( 'in' => $models[ $model ]['in'], 'out' => $models[ $model ]['out'] );
         }
-        return array( 'in' => 0.30, 'out' => 2.50 );
+        return array( 'in' => 0.30, 'out' => 2.50 ); // gemini-flash-latest defaults
     }
 
     public function generate( $prefix, $delta, array $schema, array $args = array() ) {
@@ -80,8 +109,8 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
         }
 
         $models = $this->get_models();
-        $model  = $args['model'] ?? get_option( 'wab_text_model', 'gemini-2.5-flash' );
-        if ( ! isset( $models[ $model ] ) ) $model = 'gemini-2.5-flash';
+        $model  = $args['model'] ?? get_option( 'wab_text_model', 'gemini-flash-latest' );
+        if ( ! isset( $models[ $model ] ) ) $model = 'gemini-flash-latest';
 
         $body = array(
             // Per-row delta only. Keeping the prefix out of contents is what makes
@@ -95,7 +124,36 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
             'generationConfig' => array(
                 'temperature'      => isset( $args['temperature'] ) ? (float) $args['temperature'] : 0.85,
                 'topP'             => 0.95,
-                'maxOutputTokens'  => (int) ( $args['max_tokens'] ?? 6144 ),
+
+                /**
+                 * BE GENEROUS HERE. Two reasons this must not be tight:
+                 *
+                 * 1. Gemini 2.5 models emit THINKING tokens, and those count against
+                 *    maxOutputTokens. A budget sized only for the visible answer gets
+                 *    partly consumed by reasoning, so the JSON is cut off mid-string
+                 *    and json_decode fails. That produced the misleading
+                 *    "unparseable JSON despite the enforced schema" error while the
+                 *    request itself was perfectly valid.
+                 * 2. Billing is per token ACTUALLY produced, so a high ceiling costs
+                 *    nothing. There is no reason to economise on it.
+                 */
+                'maxOutputTokens'  => min( 65536, max( 16384, (int) ( $args['max_tokens'] ?? 16384 ) ) ),
+
+                /**
+                 * NO thinkingConfig. Do not add one back.
+                 *
+                 * VERIFIED AGAINST THE LIVE API: sending
+                 * thinkingConfig => array( 'thinkingBudget' => 0 ) returns
+                 * HTTP 400 "Request contains an invalid argument" on
+                 * gemini-flash-latest and gemini-3.6-flash. Gemini 3.x flash models
+                 * do not permit thinking to be disabled. Only
+                 * gemini-3.1-flash-lite accepts the parameter, and it performs no
+                 * thinking anyway, so there is nothing to gain.
+                 *
+                 * Thinking is therefore unavoidable and must simply be BUDGETED FOR —
+                 * which is what the generous maxOutputTokens above does.
+                 */
+
                 'responseMimeType' => 'application/json',
                 'responseSchema'   => self::to_gemini_schema( $schema ),
             ),
@@ -105,7 +163,15 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
             self::BASE . $model . ':generateContent',
             $body,
             array( 'x-goog-api-key' => $key ),
-            array( 'timeout' => 180, 'max_attempts' => 3, 'label' => 'Gemini (' . $model . ')' )
+            array(
+                // Scale with the token budget. A 2,400-word page measured 34.5s, so
+                // 180s is ample for normal work — but a 4,000-word request asks for
+                // ~3x the tokens, and a flat timeout would abandon a generation that
+                // has already been billed. 60s per 8k tokens, capped at 300s.
+                'timeout'      => min( 300, max( 180, (int) ceil( ( $body['generationConfig']['maxOutputTokens'] / 8192 ) * 60 ) + 120 ) ),
+                'max_attempts' => 3,
+                'label'        => 'Gemini (' . $model . ')',
+            )
         );
 
         if ( is_wp_error( $response ) ) return $response;
@@ -124,19 +190,68 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
             if ( isset( $part['text'] ) ) $text .= $part['text'];
         }
 
+        $usage = $response['usageMetadata'] ?? array();
+
+        // Truncation must be reported as truncation.
+        //
+        // MAX_TOKENS previously fell through to the generic parse failure, so a reply
+        // that was simply cut off looked like a malformed-request problem. Retrying is
+        // pointless without more headroom, so this is surfaced distinctly and with the
+        // thinking-token count, which is usually where the budget went.
+        if ( $reason === 'MAX_TOKENS' ) {
+            return new WP_Error( 'wab_truncated', sprintf(
+                /* translators: 1: output tokens 2: thinking tokens */
+                __( 'Gemini hit its output limit and the reply was cut off mid-JSON (%1$d output tokens, %2$d of them spent thinking). Reduce Content depth, or raise the token ceiling.', 'wonder-ai-builder' ),
+                (int) ( $usage['candidatesTokenCount'] ?? 0 ),
+                (int) ( $usage['thoughtsTokenCount'] ?? 0 )
+            ) );
+        }
+
         if ( trim( $text ) === '' ) {
-            return new WP_Error( 'wab_empty_content', __( 'Gemini returned no text.', 'wonder-ai-builder' ) );
+            return new WP_Error( 'wab_empty_content', sprintf(
+                __( 'Gemini returned no text (finish reason: %s).', 'wonder-ai-builder' ),
+                $reason !== '' ? $reason : 'none given'
+            ) );
         }
 
-        $data = json_decode( WAB_Content_Sanitizer::strip_code_fences( $text ), true );
+        $data = self::decode_payload( $text );
+
         if ( ! is_array( $data ) ) {
-            return new WP_Error( 'wab_bad_json', __( 'Gemini returned unparseable JSON despite the enforced schema.', 'wonder-ai-builder' ) );
+            /**
+             * Include what Gemini actually sent.
+             *
+             * The previous message — "unparseable JSON despite the enforced schema" —
+             * threw away the single piece of evidence needed to diagnose the problem,
+             * and its wording was read as referring to the sheet's JSON-LD Schema
+             * column, which is unrelated. Log the head of the raw reply and name the
+             * decoder error.
+             */
+            $snippet = mb_substr( trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $text ) ) ), 0, 220 );
+
+            WAB_Logger::error( 'Gemini reply could not be decoded. Raw head: ' . $snippet );
+
+            return new WP_Error( 'wab_bad_json', sprintf(
+                /* translators: 1: json error 2: snippet */
+                __( 'Gemini\'s reply was not valid JSON (%1$s). This is the reply format, not your sheet\'s Schema column. Reply began: %2$s', 'wonder-ai-builder' ),
+                json_last_error_msg(),
+                $snippet
+            ) );
         }
 
-        $usage      = $response['usageMetadata'] ?? array();
         $tokens_in  = (int) ( $usage['promptTokenCount'] ?? 0 );
-        $tokens_out = (int) ( $usage['candidatesTokenCount'] ?? 0 );
         $cached_in  = (int) ( $usage['cachedContentTokenCount'] ?? 0 );
+
+        /**
+         * Thinking tokens are BILLED AT THE OUTPUT RATE and must be counted.
+         *
+         * Measured on a real hybrid-depth row: 739 visible output tokens against 2081
+         * thinking tokens. Charging only candidatesTokenCount under-reported the true
+         * cost of that request by roughly 3.8x, which would have made every budget
+         * cap and every estimate on the dashboard meaningless.
+         */
+        $visible_out  = (int) ( $usage['candidatesTokenCount'] ?? 0 );
+        $thinking_out = (int) ( $usage['thoughtsTokenCount'] ?? 0 );
+        $tokens_out   = $visible_out + $thinking_out;
 
         $pricing = $this->get_pricing( $model );
 
@@ -172,8 +287,8 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
         }
 
         $models = $this->get_models();
-        $model  = $args['model'] ?? get_option( 'wab_text_model', 'gemini-2.5-flash' );
-        if ( ! isset( $models[ $model ] ) ) $model = 'gemini-2.5-flash';
+        $model  = $args['model'] ?? get_option( 'wab_text_model', 'gemini-flash-latest' );
+        if ( ! isset( $models[ $model ] ) ) $model = 'gemini-flash-latest';
 
         $inline = array();
 
@@ -189,7 +304,13 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
                     'generationConfig'  => array(
                         'temperature'      => 0.85,
                         'topP'             => 0.95,
-                        'maxOutputTokens'  => (int) ( $req['max_tokens'] ?? 6144 ),
+
+                        // Same clamp as generate(). Batched rows must not get a tighter
+                        // ceiling than interactive ones or they truncate where the live
+                        // path succeeds — thinking tokens are drawn from this budget and
+                        // measured at 938 against 103 visible on a trivial request, so a
+                        // bare estimate leaves no headroom.
+                        'maxOutputTokens'  => min( 65536, max( 16384, (int) ( $req['max_tokens'] ?? 16384 ) ) ),
                         'responseMimeType' => 'application/json',
                         'responseSchema'   => self::to_gemini_schema( (array) $req['schema'] ),
                     ),
@@ -247,11 +368,22 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
     }
 
     /**
-     * Normalise Gemini's JOB_STATE_* enum.
+     * Normalise Gemini's batch-state enum.
      *
      * Parsed defensively: the state has appeared at both the top level and under
      * `metadata` across API revisions, and a `done` flag may arrive without any
      * explicit state.
+     *
+     * THE PREFIX IS NOT FIXED. Verified live against a real batch on
+     * models/gemini-flash-latest:batchGenerateContent, which reported
+     * BATCH_STATE_PENDING -> BATCH_STATE_RUNNING -> BATCH_STATE_SUCCEEDED. Matching
+     * only JOB_STATE_* (the older/other-endpoint spelling) meant success was reached
+     * solely via the `done` fallback below, and — the damaging case — a FAILED,
+     * CANCELLED or EXPIRED batch also carries done=true, so it was read as
+     * 'succeeded'. That sent it into fetch_batch_results(), which found nothing,
+     * logged an error, and left the batch open to be re-polled until the 48h
+     * deadline instead of releasing its jobs immediately. So compare the verb and
+     * ignore whichever prefix the API happens to use.
      */
     private static function map_state( array $response ) {
         $state = '';
@@ -259,13 +391,16 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
             if ( is_string( $candidate ) && $candidate !== '' ) { $state = $candidate; break; }
         }
 
-        switch ( strtoupper( $state ) ) {
-            case 'JOB_STATE_PENDING':   return 'pending';
-            case 'JOB_STATE_RUNNING':   return 'running';
-            case 'JOB_STATE_SUCCEEDED': return 'succeeded';
-            case 'JOB_STATE_FAILED':    return 'failed';
-            case 'JOB_STATE_CANCELLED': return 'cancelled';
-            case 'JOB_STATE_EXPIRED':   return 'expired';
+        $verb = preg_replace( '/^(BATCH|JOB)_STATE_/', '', strtoupper( $state ) );
+
+        switch ( $verb ) {
+            case 'PENDING':    return 'pending';
+            case 'RUNNING':    return 'running';
+            case 'SUCCEEDED':  return 'succeeded';
+            case 'FAILED':     return 'failed';
+            case 'CANCELLING':
+            case 'CANCELLED':  return 'cancelled';
+            case 'EXPIRED':    return 'expired';
         }
 
         // No usable state: infer from the operation's done flag.
@@ -290,19 +425,49 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
 
         if ( is_wp_error( $response ) ) return $response;
 
-        // Inline results live at response.dest.inlinedResponses[]; tolerate the
-        // structure appearing without the `response` wrapper.
-        $list = $response['response']['dest']['inlinedResponses']['inlinedResponses']
+        /**
+         * Inline results live at response.inlinedResponses.inlinedResponses[].
+         *
+         * VERIFIED LIVE against a real two-request batch. Every path this code used to
+         * try went through a `dest` key, and THE REST API DOES NOT RETURN ONE — `dest`
+         * belongs to the Python SDK's BatchJob object, not the wire format. So all four
+         * lookups missed on every batch, ingest never happened, and economy mode paid
+         * for text it then discarded: jobs sat in 'batched' until the 48h expiry
+         * released them, at which point they were regenerated at FULL price. The
+         * plugin's own "never lose work silently" rule, broken by one wrong key.
+         *
+         * The dest-shaped paths are retained last, purely as tolerated fallbacks in
+         * case a future revision adopts the SDK shape.
+         */
+        $list = $response['response']['inlinedResponses']['inlinedResponses']
+             ?? $response['response']['inlinedResponses']
+             ?? $response['inlinedResponses']['inlinedResponses']
+             ?? $response['inlinedResponses']
+             ?? $response['response']['dest']['inlinedResponses']['inlinedResponses']
              ?? $response['response']['dest']['inlinedResponses']
              ?? $response['dest']['inlinedResponses']['inlinedResponses']
              ?? $response['dest']['inlinedResponses']
              ?? null;
 
-        if ( ! is_array( $list ) ) {
+        // Unwrap one more level if we landed on the container rather than the list.
+        if ( is_array( $list ) && isset( $list['inlinedResponses'] ) && is_array( $list['inlinedResponses'] ) ) {
+            $list = $list['inlinedResponses'];
+        }
+
+        if ( ! is_array( $list ) || empty( $list ) ) {
+            // Log the actual keys returned. Guessing at this shape is what caused the
+            // original failure; next time the evidence will be in the log.
+            WAB_Logger::error( sprintf(
+                'Batch %s reported success but no inline responses were found. Top-level keys: %s. response keys: %s.',
+                $batch_id,
+                implode( ',', array_keys( $response ) ),
+                is_array( $response['response'] ?? null ) ? implode( ',', array_keys( $response['response'] ) ) : 'none'
+            ) );
+
             return new WP_Error( 'wab_batch_no_results', __( 'Batch reported success but contained no inline responses.', 'wonder-ai-builder' ) );
         }
 
-        $pricing = $this->get_pricing( get_option( 'wab_text_model', 'gemini-2.5-flash' ) );
+        $pricing = $this->get_pricing( get_option( 'wab_text_model', 'gemini-flash-latest' ) );
         $out     = array();
 
         foreach ( $list as $index => $item ) {
@@ -328,6 +493,7 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
 
             $resp   = $item['response'] ?? array();
             $reason = $resp['candidates'][0]['finishReason'] ?? '';
+            $usage  = $resp['usageMetadata'] ?? array();
 
             if ( in_array( $reason, array( 'SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'RECITATION' ), true ) ) {
                 $out[ $job_key ] = array( 'error' => 'Blocked by Gemini safety filters (' . $reason . ').' );
@@ -339,20 +505,43 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
                 if ( isset( $part['text'] ) ) $text .= $part['text'];
             }
 
+            // Report truncation AS truncation, exactly as generate() does. Left generic,
+            // it reads as a malformed-request problem and sends the operator hunting
+            // through their sheet's Schema column instead of the word count.
+            if ( $reason === 'MAX_TOKENS' ) {
+                $out[ $job_key ] = array( 'error' => sprintf(
+                    'Reply hit the output ceiling and was cut off mid-JSON (%d output tokens, %d spent thinking). Reduce the word count for this row.',
+                    (int) ( $usage['candidatesTokenCount'] ?? 0 ),
+                    (int) ( $usage['thoughtsTokenCount'] ?? 0 )
+                ) );
+                continue;
+            }
+
             if ( trim( $text ) === '' ) {
-                $out[ $job_key ] = array( 'error' => 'Empty response.' );
+                $out[ $job_key ] = array( 'error' => 'Empty response (finish reason: ' . ( $reason !== '' ? $reason : 'none given' ) . ').' );
                 continue;
             }
 
-            $data = json_decode( WAB_Content_Sanitizer::strip_code_fences( $text ), true );
+            // The SAME tolerant decoder the interactive path uses. A bare json_decode
+            // here meant a reply the live path would have recovered from — fenced,
+            // prose-wrapped, or repairably truncated — failed only when batched, which
+            // is the hardest place to notice it.
+            $data = self::decode_payload( $text );
             if ( ! is_array( $data ) ) {
-                $out[ $job_key ] = array( 'error' => 'Unparseable JSON in batch response.' );
+                $snippet = mb_substr( trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $text ) ) ), 0, 180 );
+                $out[ $job_key ] = array( 'error' => 'Unparseable JSON in batch response. Reply began: ' . $snippet );
                 continue;
             }
 
-            $usage = $resp['usageMetadata'] ?? array();
-            $in    = (int) ( $usage['promptTokenCount'] ?? 0 );
-            $o     = (int) ( $usage['candidatesTokenCount'] ?? 0 );
+            $in = (int) ( $usage['promptTokenCount'] ?? 0 );
+
+            // Thinking tokens BILL AT THE OUTPUT RATE, so they are counted here for the
+            // same reason generate() counts them. The measured sample returned 103
+            // visible output tokens against 938 thinking tokens — charging only the
+            // visible ones under-reported that row by roughly 9x, which would quietly
+            // defeat the daily budget cap on every economy run.
+            $o = (int) ( $usage['candidatesTokenCount'] ?? 0 )
+               + (int) ( $usage['thoughtsTokenCount'] ?? 0 );
 
             // Batch bills at 50% of interactive rates.
             $cost = ( ( $in / 1000000 ) * $pricing['in'] + ( $o / 1000000 ) * $pricing['out'] ) * 0.5;
@@ -370,6 +559,11 @@ class WAB_Text_Gemini implements WAB_Text_Provider_Interface, WAB_Batch_Provider
         }
 
         return $out;
+    }
+
+    /** Shared tolerant decoder — handles fences, prose wrappers, and truncation. */
+    private static function decode_payload( $text ) {
+        return WAB_Content_Sanitizer::decode_json( $text );
     }
 
     /**

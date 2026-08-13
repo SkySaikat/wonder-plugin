@@ -363,6 +363,11 @@ class WAB_Queue {
         $max_jobs = $opts['max_jobs'] ?? (int) get_option( 'wab_jobs_per_tick', 5 );
         $max_jobs = max( 1, min( self::MAX_JOBS_PER_TICK, (int) $max_jobs ) );
 
+        // Economy mode, immediately after a batch submission: only touch jobs whose
+        // text has already been paid for. Set by WAB_Runner — see the note on
+        // WAB_Batch::maybe_submit()'s defer_unbatched flag.
+        $payload_only = ! empty( $opts['payload_only'] );
+
         $started   = microtime( true );
         $processed = 0;
         $succeeded = 0;
@@ -402,7 +407,7 @@ class WAB_Queue {
             // HTTP client's own internal retries) and consumed the whole max_jobs
             // budget on one row. Skipping it here defers the retry to the next tick,
             // which gives a natural ~60s backoff for free.
-            $job = self::claim_next( $attempted );
+            $job = self::claim_next( $attempted, $payload_only );
             if ( ! $job ) break; // Nothing left to claim.
 
             $attempted[] = $job->job_id;
@@ -436,8 +441,12 @@ class WAB_Queue {
      * UPDATE (atomic under MySQL's row locking), then read back the row bearing
      * that token. This is race-free without an explicit transaction and works on
      * every MySQL/MariaDB version WordPress supports.
+     *
+     * @param array $skip         job_ids already attempted this tick.
+     * @param bool  $payload_only Claim only jobs whose batched text is already paid
+     *                            for. Economy mode only; see process_batch().
      */
-    private static function claim_next( array $skip = array() ) {
+    private static function claim_next( array $skip = array(), $payload_only = false ) {
         global $wpdb;
         $t = self::table();
 
@@ -446,6 +455,12 @@ class WAB_Queue {
         $lease = gmdate( 'Y-m-d H:i:s', time() + self::LEASE_SECONDS );
 
         $params = array( self::STATUS_PROCESSING, $token, $lease, $now, self::STATUS_QUEUED );
+
+        // Note this deliberately does NOT filter on status 'batched' — those rows are
+        // already invisible here because only 'queued' is selected. What it adds is the
+        // narrower case: queued rows still awaiting a batch, which must not be
+        // generated interactively while a batch is in flight for their siblings.
+        $payload_clause = $payload_only ? " AND payload IS NOT NULL AND payload <> ''" : '';
 
         $skip_clause = '';
         if ( ! empty( $skip ) ) {
@@ -462,6 +477,7 @@ class WAB_Queue {
                     attempts = attempts + 1,
                     updated_at = %s
               WHERE status = %s
+              {$payload_clause}
               {$skip_clause}
               ORDER BY row_index ASC, id ASC
               LIMIT 1",

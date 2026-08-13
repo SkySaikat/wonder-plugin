@@ -68,6 +68,113 @@ class WAB_Content_Sanitizer {
     }
 
     /**
+     * Close a truncated JSON document by walking it once and tracking open
+     * delimiters on a stack.
+     *
+     * Counting braces and brackets independently is NOT sufficient: appending all
+     * the ']' then all the '}' produces the wrong nesting whenever an object is open
+     * inside an array. A reply cut off inside a FAQ entry —
+     *
+     *     {"title":"A","faq":[{"q":"Why?","a":"Because
+     *
+     * needs "  }  ]  }  in that exact order. Counting yields " ] }} and stays invalid.
+     * A stack closes in reverse order of opening, which is the only correct rule.
+     */
+    private static function close_truncated_json( $s ) {
+        $stack     = array();
+        $in_string = false;
+        $escaped   = false;
+        $len       = strlen( $s );
+
+        for ( $i = 0; $i < $len; $i++ ) {
+            $c = $s[ $i ];
+
+            if ( $escaped ) { $escaped = false; continue; }
+            if ( $c === '\\' ) { $escaped = true; continue; }
+
+            if ( $c === '"' ) { $in_string = ! $in_string; continue; }
+            if ( $in_string )  { continue; }
+
+            if ( $c === '{' || $c === '[' ) {
+                $stack[] = $c;
+            } elseif ( $c === '}' || $c === ']' ) {
+                array_pop( $stack );
+            }
+        }
+
+        $out = rtrim( $s );
+
+        // Close an unterminated string first.
+        if ( $in_string ) $out .= '"';
+
+        // Drop a dangling separator or a key with no value, e.g. '..., "a":'
+        $out = preg_replace( '/,\s*$/', '', $out );
+        $out = preg_replace( '/,?\s*"[^"]*"\s*:\s*$/', '', $out );
+
+        // Then close every open container, innermost first.
+        while ( ! empty( $stack ) ) {
+            $out .= ( array_pop( $stack ) === '{' ) ? '}' : ']';
+        }
+
+        return $out;
+    }
+
+    /**
+     * Decode a model reply into an array, repairing the failure modes that actually
+     * occur in practice.
+     *
+     * Structured-output modes are strict but not infallible: replies still arrive
+     * wrapped in prose, fenced in markdown, or truncated mid-object when the token
+     * budget runs out. A plain json_decode() throws all of that away and reports only
+     * "syntax error", which is the least useful thing it could say.
+     *
+     * Four passes, cheapest first. Nothing here invents content — a repair either
+     * yields the fields the model already produced, or fails.
+     *
+     * @return array|null
+     */
+    public static function decode_json( $text ) {
+        $text = trim( (string) $text );
+        if ( $text === '' ) return null;
+
+        // 1. As-is.
+        $data = json_decode( $text, true );
+        if ( is_array( $data ) ) return $data;
+
+        // 2. Strip markdown fences.
+        $stripped = self::strip_code_fences( $text );
+        $data = json_decode( $stripped, true );
+        if ( is_array( $data ) ) return $data;
+
+        // 3. Extract the outermost {...}, discarding any prose either side.
+        $first = strpos( $stripped, '{' );
+        $last  = strrpos( $stripped, '}' );
+        if ( $first !== false && $last !== false && $last > $first ) {
+            $candidate = substr( $stripped, $first, $last - $first + 1 );
+            $data = json_decode( $candidate, true );
+            if ( is_array( $data ) ) return $data;
+        }
+
+        // 4. Truncated reply: close what is open.
+        //
+        // A cut-off object is the common case when the output ceiling is hit. If the
+        // text ends inside a string, close it, then close every unbalanced brace and
+        // bracket. Whatever fields completed are recovered; the trailing partial one is
+        // dropped. Better than discarding a whole billed generation.
+        if ( $first !== false ) {
+            $candidate = self::close_truncated_json( substr( $stripped, $first ) );
+
+            $data = json_decode( $candidate, true );
+            if ( is_array( $data ) ) {
+                WAB_Logger::warn( 'Recovered a truncated model reply by closing unbalanced JSON. Consider a lower Content depth.' );
+                return $data;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Remove ```html ... ``` and ``` ... ``` wrappers.
      */
     public static function strip_code_fences( $text ) {

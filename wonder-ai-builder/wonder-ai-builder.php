@@ -3,7 +3,7 @@
  * Plugin Name:       Wonder AI Builder
  * Plugin URI:        https://saikatchowdhury.com/
  * Description:       Bulk-generate SEO Pages AND Posts from a spreadsheet using pluggable AI text and image providers. Unified successor to Wonder Page + Wonder Blog.
- * Version:           2.0.0
+ * Version:           2.1.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            WonderWebStudio
@@ -16,7 +16,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'WAB_VERSION',    '2.0.0' );
+define( 'WAB_VERSION',    '2.1.0' );
 define( 'WAB_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WAB_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'WAB_PLUGIN_FILE', __FILE__ );

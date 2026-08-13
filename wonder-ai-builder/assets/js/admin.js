@@ -297,7 +297,7 @@
     bindImport: function () {
       $( '#wab-mode' ).on( 'change', function () {
         var w = $( this ).find( ':selected' ).data( 'words' );
-        $( '#wab-mode-note' ).text( w ? ( 'About ' + w + ' words per page.' ) : '' );
+        $( '#wab-mode-note' ).text( w ? ( 'Target ' + w + ' words, with a hard minimum enforced in the prompt.' ) : '' );
       } ).trigger( 'change' );
 
       $( '#wab-file' ).on( 'change', function () {
@@ -348,7 +348,8 @@
           post_type: $( '#wab-post-type' ).val(),
           content_mode: $( '#wab-mode' ).val(),
           image_source: $( '#wab-image-source' ).val(),
-          generation_mode: $( '#wab-generation-mode' ).val()
+          generation_mode: $( '#wab-generation-mode' ).val(),
+          target_words: $( '#wab-target-words' ).val() || 0
         } ).done( function ( r ) {
           if ( ! r || ! r.success ) {
             App.say( '#wab-upload-status', App.esc( ( r && r.data && r.data.message ) || WAB.i18n.genericError ), 'error' );

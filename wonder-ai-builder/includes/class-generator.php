@@ -47,7 +47,7 @@ class WAB_Generator {
             $job->import_id
         ) );
 
-        $mode      = $import->content_mode ?? get_option( 'wab_content_mode', WAB_Prompt_Builder::MODE_HYBRID );
+        $mode      = WAB_Prompt_Builder::mode_for( $import );
         $post_type = self::resolve_post_type( $row, $import );
 
         // ---- 1. TEXT -------------------------------------------------
@@ -61,7 +61,13 @@ class WAB_Generator {
         // the Author -> stored XSS chain this closes.
         $body = WAB_Content_Sanitizer::clean_post_html( $content['content'] ?? '' );
 
-        $min_words = (int) get_option( 'wab_min_words', 120 );
+        // Floor scales with the requested length: 60% of the resolved minimum. A flat
+        // 120 would happily pass a 200-word reply that was asked to be 2,200.
+        $len       = WAB_Prompt_Builder::resolve_length(
+            $mode,
+            WAB_Prompt_Builder::target_words_for( $row, $import )
+        );
+        $min_words = max( (int) get_option( 'wab_min_words', 120 ), (int) round( $len['min'] * 0.6 ) );
         $valid     = WAB_Content_Sanitizer::validate( $body, $min_words );
         if ( is_wp_error( $valid ) ) return $valid; // Permanent — never retried.
 
@@ -103,7 +109,12 @@ class WAB_Generator {
         // ---- 7. SEO META ---------------------------------------------
         self::apply_seo_meta( $post_id, $row, $content );
 
-        WAB_Logger::info( sprintf( 'Job %s created %s %d.', $job->job_id, $post_type, $post_id ) );
+        WAB_Logger::info( sprintf(
+            'Job %s created %s %d — %d words (target %d).',
+            $job->job_id, $post_type, $post_id,
+            WAB_Content_Sanitizer::count_words( $body ),
+            (int) $len['target']
+        ) );
 
         return (int) $post_id;
     }
@@ -145,9 +156,16 @@ class WAB_Generator {
 
         $want_faq = (bool) get_option( 'wab_enable_faq', 1 );
 
+        // Resolved ONCE. The prompt and the token ceiling must be sized from the same
+        // number — see target_words_for() for what happens when they are not.
+        $target_words = WAB_Prompt_Builder::target_words_for( $row, $import );
+
         $delta = WAB_Prompt_Builder::build_delta( $row, array(
             'mode'              => $mode,
             'row_index'         => (int) $job->row_index,
+            // Already resolved through row > sheet > setting, so it is passed as the
+            // most-specific slot.
+            'row_words'         => $target_words,
             'sibling_locations' => self::sibling_locations( $job->import_id, $row ),
             'internal_links'    => WAB_Scanner::internal_link_candidates( $row ),
         ) );
@@ -156,7 +174,11 @@ class WAB_Generator {
             $prefix,
             $delta,
             WAB_Prompt_Builder::output_schema( $want_faq ),
-            array( 'max_tokens' => WAB_Prompt_Builder::estimate_output_tokens( $mode, $want_faq ) + 1024 )
+            array( 'max_tokens' => WAB_Prompt_Builder::estimate_output_tokens(
+                $mode,
+                $want_faq,
+                $target_words
+            ) )
         );
 
         if ( is_wp_error( $result ) ) return $result;
@@ -246,6 +268,15 @@ class WAB_Generator {
         ) );
 
         return $prefix;
+    }
+
+    /**
+     * Public accessor, for the same reason prefix_for_import() is public: batched and
+     * interactive rows must be built from identical inputs, or the two paths quietly
+     * produce different pages — batched ones missing their nearby-area links.
+     */
+    public static function siblings_for( $import_id, $row ) {
+        return self::sibling_locations( $import_id, $row );
     }
 
     /**

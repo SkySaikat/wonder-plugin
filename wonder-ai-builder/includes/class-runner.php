@@ -182,13 +182,23 @@ class WAB_Runner {
             // Order matters: POLL FIRST so completed text lands as job payloads and
             // can be consumed by process_batch() in this same tick. Submitting first
             // would delay every ingest by a full cycle.
+            $payload_only = false;
+
             if ( WAB_Batch::enabled() ) {
                 $report['batch_poll']   = WAB_Batch::poll_all();
                 $report['batch_submit'] = WAB_Batch::maybe_submit();
+
+                // A batch was just submitted, so the rows that did not fit in it are
+                // next in line for the FOLLOWING batch. Restrict this tick's worker to
+                // jobs whose text is already paid for, instead of generating the
+                // overflow interactively at full price. Absent flag = process normally,
+                // so any batching problem degrades to full price rather than a stall.
+                $payload_only = ! empty( $report['batch_submit']['defer_unbatched'] );
             }
 
             $report = array_merge( $report, WAB_Queue::process_batch( array(
-                'max_jobs' => $args['max_jobs'] > 0 ? (int) $args['max_jobs'] : null,
+                'max_jobs'     => $args['max_jobs'] > 0 ? (int) $args['max_jobs'] : null,
+                'payload_only' => $payload_only,
             ) ) );
         } catch ( \Throwable $e ) {
             // A fatal inside one job must not leave the lock held or the queue wedged.

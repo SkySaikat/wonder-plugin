@@ -60,6 +60,15 @@ $batch = WAB_Batch::summary();
       </div>
 
       <div class="wab-field">
+        <label class="wab-label" for="wab-target-words"><?php esc_html_e( 'Exact word count (optional)', 'wonder-ai-builder' ); ?></label>
+        <input type="number" id="wab-target-words" class="wab-input" min="0" max="4000" step="50" placeholder="<?php esc_attr_e( 'Leave blank to use the preset above', 'wonder-ai-builder' ); ?>">
+        <p class="wab-hint">
+          <?php esc_html_e( 'Overrides the preset for every row in this sheet. 120–4000.', 'wonder-ai-builder' ); ?>
+          <br><?php esc_html_e( 'For per-row control, add a "Words" column to your spreadsheet — that beats both.', 'wonder-ai-builder' ); ?>
+        </p>
+      </div>
+
+      <div class="wab-field">
         <label class="wab-label" for="wab-image-source"><?php esc_html_e( 'Images', 'wonder-ai-builder' ); ?></label>
         <select id="wab-image-source" class="wab-input">
           <?php $src = get_option( 'wab_image_source', 'library_then_ai' ); ?>
@@ -81,6 +90,13 @@ $batch = WAB_Batch::summary();
         <?php if ( $batch['enabled'] && ! $batch['available'] ) : ?>
           <p class="wab-hint wab-warn"><?php echo esc_html( $batch['reason'] ); ?></p>
         <?php endif; ?>
+        <p class="wab-hint">
+          <?php printf(
+            /* translators: %d: minimum rows per economy batch */
+            esc_html__( 'Economy only batches when at least %d rows are waiting — a smaller run generates live at Standard price instead of sitting in a queue. This is a site-wide setting, not per sheet.', 'wonder-ai-builder' ),
+            (int) WAB_Batch::MIN_PER_BATCH
+          ); ?>
+        </p>
       </div>
 
       <hr class="wab-hr">

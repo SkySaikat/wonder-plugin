@@ -41,7 +41,10 @@ class WAB_Schema_Builder {
      */
     public static function supported_types() {
         return array(
-            'auto'          => __( 'Auto-detect from page type', 'wonder-ai-builder' ),
+            // Default. Matches how operators actually work: schema is authored in
+            // the sheet, and a row without one simply does not need structured data.
+            'csv_only'      => __( 'Only what the sheet provides (recommended)', 'wonder-ai-builder' ),
+            'auto'          => __( 'Auto-build from page type', 'wonder-ai-builder' ),
             'LocalBusiness' => 'LocalBusiness',
             'Service'       => 'Service',
             'Product'       => 'Product',
@@ -88,6 +91,16 @@ class WAB_Schema_Builder {
         // ---------------------------------------------------------------
         // Path B: build deterministically from data we already hold.
         // ---------------------------------------------------------------
+        //
+        // Unless the operator asked for sheet-only. In csv_only mode a row with no
+        // Schema column gets NO structured data at all — which is the correct
+        // outcome: absent schema means that page did not need any. Nothing is
+        // invented, and either way the API is never involved.
+        if ( get_option( 'wab_schema_type', 'csv_only' ) === 'csv_only' ) {
+            delete_post_meta( $post_id, self::META_KEY );
+            return null;
+        }
+
         $type = self::resolve_type( $row, $post );
         if ( $type === 'none' ) {
             delete_post_meta( $post_id, self::META_KEY );
@@ -164,11 +177,11 @@ class WAB_Schema_Builder {
         $row_type = isset( $row->schema_type ) ? trim( (string) $row->schema_type ) : '';
         if ( $row_type !== '' ) {
             foreach ( $supported as $s ) {
-                // 'auto' is a UI sentinel, not a schema.org type. Matching it here
-                // would emit '"@type":"auto"' — invalid structured data on every
-                // page — because build() has no 'auto' case and falls to default.
-                // 'none' is handled earlier by the caller.
-                if ( $s === 'auto' ) continue;
+                // 'auto' and 'csv_only' are UI sentinels, not schema.org types.
+                // Matching either would emit '"@type":"auto"' — invalid structured
+                // data on every page — because build() has no case for them and falls
+                // through to default. 'none' is handled earlier by the caller.
+                if ( $s === 'auto' || $s === 'csv_only' ) continue;
                 if ( strcasecmp( $s, $row_type ) === 0 ) return $s;
             }
         }

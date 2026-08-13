@@ -245,6 +245,14 @@ class WAB_Batch {
         ) );
 
         // Mark jobs batched so the normal worker ignores them.
+        //
+        // attempts is incremented HERE, not only in claim_next(). A batch submission is
+        // a paid attempt like any other, and without counting it a row that fails
+        // inside the batch is returned to 'queued' with attempts untouched — so it is
+        // re-selected by the next maybe_submit(), fails again for the same deterministic
+        // reason, and re-bills forever. Counting it means the MAX_RETRIES filter in the
+        // SELECT above eventually stops batching that row and lets the standard path
+        // fail it visibly instead.
         $placeholders = implode( ',', array_fill( 0, count( $job_ids ), '%s' ) );
         $params       = array_merge(
             array( self::STATUS_BATCHED, $batch_id, current_time( 'mysql' ) ),
@@ -253,7 +261,8 @@ class WAB_Batch {
 
         $wpdb->query( $wpdb->prepare(
             "UPDATE {$jobs_t}
-                SET status = %s, batch_id = %s, locked_by = NULL, locked_until = NULL, updated_at = %s
+                SET status = %s, batch_id = %s, attempts = attempts + 1,
+                    locked_by = NULL, locked_until = NULL, updated_at = %s
               WHERE job_id IN ({$placeholders})",
             $params
         ) );
@@ -269,6 +278,24 @@ class WAB_Batch {
             'submitted' => count( $job_ids ),
             'batch_id'  => $batch_id,
             'estimate'  => round( $projected, 5 ),
+
+            /**
+             * Tell the worker not to burn full price on rows that are about to be
+             * batched. See WAB_Runner's use of this flag.
+             *
+             * THE LEAK THIS CLOSES: submission is capped at MAX_PER_BATCH, so a 250-row
+             * import leaves 50 rows still 'queued'. process_batch() runs in this same
+             * tick and cheerfully generated them INTERACTIVELY at full price — the exact
+             * saving the operator switched to Economy for, spent on the rows that just
+             * missed the cut, every tick.
+             *
+             * Only ever set on a SUCCESSFUL submission, which is what makes it
+             * stall-proof: if batching is unavailable, below threshold, over budget or
+             * erroring, submitted is 0, this key is absent, and the standard worker
+             * processes everything as normal. Degrading to full price is fine; stalling
+             * is not.
+             */
+            'defer_unbatched' => true,
         );
     }
 
@@ -289,12 +316,18 @@ class WAB_Batch {
         }
 
         $import = $wpdb->get_row( $wpdb->prepare(
-            "SELECT content_mode FROM {$wpdb->prefix}wab_imports WHERE import_id = %s LIMIT 1",
+            "SELECT content_mode, target_words FROM {$wpdb->prefix}wab_imports WHERE import_id = %s LIMIT 1",
             $job->import_id
         ) );
 
-        $mode     = $import->content_mode ?? get_option( 'wab_content_mode', WAB_Prompt_Builder::MODE_HYBRID );
+        $mode     = WAB_Prompt_Builder::mode_for( $import );
         $want_faq = (bool) get_option( 'wab_enable_faq', 1 );
+
+        // Same resolver as the interactive path, so Settings -> Default word count and
+        // the sheet's exact word count apply to batched rows too. They previously did
+        // not: this method read target_words directly and never consulted the option,
+        // so switching to Economy silently reverted every page to its depth preset.
+        $target_words = WAB_Prompt_Builder::target_words_for( $row, $import );
 
         return array(
             'key'        => $job->job_id,
@@ -302,10 +335,14 @@ class WAB_Batch {
             'delta'      => WAB_Prompt_Builder::build_delta( $row, array(
                 'mode'              => $mode,
                 'row_index'         => (int) $job->row_index,
+                'row_words'         => $target_words,
+                // Parity with WAB_Generator: without this, batched location pages lose
+                // their nearby-area internal links and read differently to live ones.
+                'sibling_locations' => WAB_Generator::siblings_for( $job->import_id, $row ),
                 'internal_links'    => WAB_Scanner::internal_link_candidates( $row ),
             ) ),
             'schema'     => WAB_Prompt_Builder::output_schema( $want_faq ),
-            'max_tokens' => WAB_Prompt_Builder::estimate_output_tokens( $mode, $want_faq ) + 1024,
+            'max_tokens' => WAB_Prompt_Builder::estimate_output_tokens( $mode, $want_faq, $target_words ),
         );
     }
 
@@ -327,13 +364,15 @@ class WAB_Batch {
 
         $batches_t = self::table();
 
+        $orphans = self::rescue_orphans();
+
         $open = $wpdb->get_results( $wpdb->prepare(
             "SELECT * FROM {$batches_t} WHERE status IN (%s, %s) ORDER BY id ASC LIMIT 5",
             'pending',
             'running'
         ) );
 
-        if ( empty( $open ) ) return array( 'polled' => 0 );
+        if ( empty( $open ) ) return array( 'polled' => 0, 'orphans' => $orphans );
 
         $provider = WAB_Provider_Registry::text();
         if ( ! $provider instanceof WAB_Batch_Provider_Interface ) {
@@ -383,7 +422,51 @@ class WAB_Batch {
             $ingested += self::ingest( $batch, $results );
         }
 
-        return array( 'polled' => count( $open ), 'ingested' => $ingested );
+        return array( 'polled' => count( $open ), 'ingested' => $ingested, 'orphans' => $orphans );
+    }
+
+    /**
+     * Backstop: free any job marked 'batched' that no longer has a live batch to wait
+     * for — because its batch row was cleared, or the table was rebuilt, or a code
+     * path ended a batch without releasing its jobs.
+     *
+     * Deliberately broad, because the cost asymmetry is extreme. A false positive
+     * regenerates one page at full price; a false negative leaves a row invisible to
+     * claim_next() forever, since 'batched' is not a status the worker selects. The
+     * only reason this is safe to run every tick is that jobs belonging to a genuinely
+     * open batch are excluded by the sub-select.
+     *
+     * @return int Jobs released.
+     */
+    private static function rescue_orphans() {
+        global $wpdb;
+
+        if ( ! self::table_exists() ) return 0;
+
+        $jobs_t    = self::jobs_table();
+        $batches_t = self::table();
+
+        $released = (int) $wpdb->query( $wpdb->prepare(
+            "UPDATE {$jobs_t} j
+                SET j.status = %s, j.batch_id = NULL, j.error_code = %s, j.error_message = %s, j.updated_at = %s
+              WHERE j.status = %s
+                AND ( j.batch_id IS NULL OR j.batch_id NOT IN (
+                        SELECT b.batch_id FROM {$batches_t} b WHERE b.status IN (%s, %s)
+                ) )",
+            WAB_Queue::STATUS_QUEUED,
+            'wab_batch_orphaned',
+            'No open batch was left to deliver this row, so it returned to the standard queue.',
+            current_time( 'mysql' ),
+            self::STATUS_BATCHED,
+            'pending',
+            'running'
+        ) );
+
+        if ( $released > 0 ) {
+            WAB_Logger::warn( sprintf( '%d job(s) were waiting on a batch that no longer exists; returned to the queue.', $released ) );
+        }
+
+        return $released;
     }
 
     /**
@@ -448,6 +531,39 @@ class WAB_Batch {
 
         if ( $cost > 0 ) {
             WAB_Cost_Guard::record( $cost, 'text' );
+        }
+
+        /**
+         * Rescue rows the batch simply did not answer for.
+         *
+         * ingest() can only update jobs that APPEAR in the results, and a result can
+         * legitimately go missing: fetch_batch_results() skips any item it cannot
+         * attribute (no metadata key) rather than guessing by position. Those jobs
+         * would keep status 'batched' — which claim_next() never selects — while the
+         * batch row was marked succeeded and stopped being polled. The row would then
+         * sit "waiting on an economy batch" forever with nothing left to wait for.
+         * Silent work loss, which is precisely what this plugin refuses to do.
+         *
+         * Returning them to 'queued' costs a full-price regeneration at worst.
+         */
+        $stranded = (int) $wpdb->query( $wpdb->prepare(
+            "UPDATE {$jobs_t}
+                SET status = %s, batch_id = NULL, error_code = %s, error_message = %s, updated_at = %s
+              WHERE batch_id = %s AND status = %s",
+            WAB_Queue::STATUS_QUEUED,
+            'wab_batch_missing_result',
+            'The batch completed without returning this row; it was re-queued for standard generation.',
+            $now,
+            $batch->batch_id,
+            self::STATUS_BATCHED
+        ) );
+
+        if ( $stranded > 0 ) {
+            WAB_Logger::warn( sprintf(
+                'Batch %s returned no result for %d job(s); they were re-queued rather than left waiting.',
+                $batch->batch_id,
+                $stranded
+            ) );
         }
 
         $wpdb->update( self::table(), array(
