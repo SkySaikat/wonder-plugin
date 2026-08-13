@@ -398,7 +398,16 @@ class WAB_Core {
     public function ajax_run_now() {
         WAB_Security::guard( WAB_Security::CAP_GENERATE );
 
-        $report = WAB_Runner::tick( array( 'source' => 'manual', 'max_jobs' => 3 ) );
+        /**
+         * force => true. A human pressing "Run one job now" is an explicit
+         * instruction, so it must not be silently refused by the throttle or the
+         * load gate. Without this the button reported "Server load too high, so the
+         * worker deferred" and did nothing — which reads exactly like a broken button.
+         *
+         * The LOCK is still respected (tick() cannot be forced past it), so this can
+         * never create a second concurrent worker.
+         */
+        $report = WAB_Runner::tick( array( 'source' => 'manual', 'force' => true, 'max_jobs' => 3 ) );
 
         wp_send_json_success( array(
             'report' => $report,

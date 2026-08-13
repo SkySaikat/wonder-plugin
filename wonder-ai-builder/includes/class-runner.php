@@ -223,16 +223,46 @@ class WAB_Runner {
      * mark for 1-minute load average. Hosts without sys_getloadavg (Windows, some
      * containers) simply pass.
      */
+    /**
+     * Optional server-load gate — DISABLED BY DEFAULT, and that default is deliberate.
+     *
+     * ========================================================================
+     * WHY THIS IS OFF UNLESS EXPLICITLY CONFIGURED
+     * ========================================================================
+     * The original version auto-derived a threshold from CPU count and compared it to
+     * sys_getloadavg(). On shared or containerised hosting those two numbers are
+     * measured at DIFFERENT SCOPES and cannot be compared:
+     *
+     *   sys_getloadavg()      -> load of the ENTIRE PHYSICAL HOST, shared by
+     *                            potentially hundreds of unrelated sites. A reading
+     *                            of 11.52 on shared hosting is unremarkable and
+     *                            completely outside this site's control.
+     *   /proc/cpuinfo         -> inside a container, often reports only the 1-2 cores
+     *                            allocated to THIS account, not the host's 32+.
+     *
+     * Comparing host-wide load against container CPU count meant the gate evaluated
+     * as "server too busy" on essentially every tick, forever. Observed in
+     * production: load 11.52 vs an auto threshold of 2.00, so the queue never moved
+     * while every other diagnostic reported healthy. A safety guard that silently
+     * blocks all work is worse than no guard.
+     *
+     * The genuine protections are elsewhere and are scope-correct: exactly one worker
+     * (WAB_Lock), a bounded batch, a wall-clock ceiling, and a PHP memory-limit check.
+     * Those measure this process, not the neighbours.
+     *
+     * Operators on dedicated hardware can still set wab_load_threshold to a real
+     * number and get the old behaviour. 0 now means OFF, not "guess for me".
+     */
     private static function load_check() {
+        $threshold = (float) get_option( 'wab_load_threshold', 0 );
+
+        // 0 or negative = disabled. No auto-derivation: see the note above.
+        if ( $threshold <= 0 ) return true;
+
         if ( ! function_exists( 'sys_getloadavg' ) ) return true;
 
         $load = @sys_getloadavg();
         if ( ! is_array( $load ) || ! isset( $load[0] ) ) return true;
-
-        $threshold = (float) get_option( 'wab_load_threshold', 0 );
-        if ( $threshold <= 0 ) {
-            $threshold = max( 2.0, (float) self::cpu_count() );
-        }
 
         if ( (float) $load[0] > $threshold ) {
             return new WP_Error( 'wab_high_load', sprintf(

@@ -37,10 +37,48 @@ class WAB_Diagnostics {
         $checks[] = self::check_text_provider();
         $checks[] = self::check_image_source();
         $checks[] = self::check_budget();
+        $checks[] = self::check_load_gate();
         $checks[] = self::check_stuck_work();
         $checks[] = self::check_php();
 
         return $checks;
+    }
+
+    /**
+     * The optional load gate, reported explicitly.
+     *
+     * This check exists because the gate previously blocked every tick on shared
+     * hosting — comparing host-wide sys_getloadavg() against container CPU count —
+     * and nothing in the UI said so. A guard that can halt all work must be visible.
+     */
+    private static function check_load_gate() {
+        $threshold = (float) get_option( 'wab_load_threshold', 0 );
+        $load      = function_exists( 'sys_getloadavg' ) ? @sys_getloadavg() : null;
+        $current   = ( is_array( $load ) && isset( $load[0] ) ) ? (float) $load[0] : null;
+
+        if ( $threshold <= 0 ) {
+            return self::row( self::PASS, __( 'Server load gate', 'wonder-ai-builder' ),
+                $current !== null
+                    ? sprintf( __( 'Disabled (recommended). Current host load is %.2f, which is ignored.', 'wonder-ai-builder' ), $current )
+                    : __( 'Disabled (recommended).', 'wonder-ai-builder' )
+            );
+        }
+
+        if ( $current !== null && $current > $threshold ) {
+            return self::row(
+                self::FAIL,
+                __( 'Server load gate', 'wonder-ai-builder' ),
+                sprintf(
+                    __( 'Blocking work: host load %1$.2f exceeds your threshold of %2$.2f.', 'wonder-ai-builder' ),
+                    $current, $threshold
+                ),
+                __( 'On shared hosting this reading covers the whole physical server, not your site, so it will almost always be high. Set "Pause above server load" to 0 in Settings to disable the gate.', 'wonder-ai-builder' )
+            );
+        }
+
+        return self::row( self::PASS, __( 'Server load gate', 'wonder-ai-builder' ),
+            sprintf( __( 'Threshold %1$.2f, current load %2$.2f. Not blocking.', 'wonder-ai-builder' ),
+                $threshold, $current === null ? 0 : $current ) );
     }
 
     /** Worst status across all checks, for the page-level banner. */

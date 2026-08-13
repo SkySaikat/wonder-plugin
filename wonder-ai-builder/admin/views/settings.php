@@ -164,7 +164,16 @@ define( 'WAB_ANTHROPIC_API_KEY', '…' );</code></pre>
           <label class="wab-label" for="wab_load_threshold"><?php esc_html_e( 'Pause above server load', 'wonder-ai-builder' ); ?></label>
           <input type="number" step="0.5" min="0" id="wab_load_threshold" name="wab_load_threshold" class="wab-input"
                  value="<?php echo esc_attr( $opt['wab_load_threshold'] ); ?>">
-          <p class="wab-hint"><?php printf( esc_html__( '0 = auto (CPU count, detected: %d).', 'wonder-ai-builder' ), (int) WAB_Runner::cpu_count() ); ?></p>
+          <p class="wab-hint">
+            <strong><?php esc_html_e( '0 = off, and 0 is correct for shared hosting.', 'wonder-ai-builder' ); ?></strong>
+            <?php esc_html_e( 'This reads the load of the whole physical server, not just your site, so on shared hosting it is normally high and would block generation permanently. Only set a number on dedicated hardware.', 'wonder-ai-builder' ); ?>
+            <?php if ( function_exists( 'sys_getloadavg' ) ) {
+              $wab_l = @sys_getloadavg();
+              if ( is_array( $wab_l ) && isset( $wab_l[0] ) ) {
+                printf( esc_html__( 'Current host load: %.2f.', 'wonder-ai-builder' ), (float) $wab_l[0] );
+              }
+            } ?>
+          </p>
         </div>
       </div>
     </section>
