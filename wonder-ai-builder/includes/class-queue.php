@@ -130,15 +130,46 @@ class WAB_Queue {
     // ---------------------------------------------------------------
 
     /**
-     * Add rows to the queue, idempotently.
+     * Put rows into the queue.
      *
-     * The UNIQUE(import_id, row_index) index means re-queuing the same rows is a
-     * no-op rather than a duplicate. INSERT IGNORE lets us enqueue 100 rows in one
-     * statement without a race between two admins clicking Generate simultaneously.
+     * ============================================================================
+     * THIS IS AN UPSERT, NOT AN INSERT. IT USED TO BE "INSERT IGNORE" AND THAT WAS
+     * THE BUG THAT MADE THE WHOLE QUEUE APPEAR DEAD.
+     * ============================================================================
+     * wab_jobs carries UNIQUE(import_id,row_index) so a row can never produce two
+     * posts. With a blind INSERT IGNORE, that same index silently swallowed every
+     * re-queue attempt:
+     *
+     *   1. Row 0 is generated and fails (no API key, bad brief, rate limit...).
+     *      A job row now exists with status='failed'.
+     *   2. The operator fixes the cause, re-selects row 0, presses Generate.
+     *   3. INSERT IGNORE collides with the unique index, affects 0 rows.
+     *   4. enqueue() returns 0. The UI honestly reports "0 queued".
+     *   5. Nothing ever happens again for that row. Permanently.
+     *
+     * The UI compounded it by leaving 'failed' and 'cancelled' rows selectable — as
+     * it should, since retrying is the point — so the Generate button looked broken
+     * rather than skipped.
+     *
+     * Correct behaviour, in two explicit statements rather than one clever one:
+     *
+     *   A. RE-OPEN existing jobs that are in a terminal state (failed/cancelled).
+     *      Attempts reset to 0 so the operator gets a fresh retry budget.
+     *      attachment_id and payload are DELIBERATELY PRESERVED — those represent
+     *      money already spent, and reusing them is the anti-double-billing rule.
+     *   B. INSERT rows that have no job at all.
+     *
+     * In-flight jobs (queued/processing/batched) and completed ones (done) are never
+     * touched, so this cannot resurrect a running job or duplicate a post.
+     *
+     * ON DUPLICATE KEY UPDATE was rejected: within that clause MySQL exposes the
+     * pre-update value for the first assignment but already-updated values for later
+     * ones, so a conditional guard like IF(status IN (...)) silently changes meaning
+     * depending on column order. Two statements are slower and obviously correct.
      *
      * @param string $import_id
      * @param array  $rows      Row objects with ->id and ->row_index.
-     * @return int Number newly queued.
+     * @return int Number of rows now queued (newly inserted + re-opened).
      */
     public static function enqueue( $import_id, array $rows ) {
         global $wpdb;
@@ -146,6 +177,46 @@ class WAB_Queue {
 
         $t   = self::table();
         $now = current_time( 'mysql' );
+
+        // ---- Step A: re-open terminal jobs for the requested rows -------
+        $indexes = array();
+        foreach ( $rows as $r ) {
+            $idx = is_object( $r )
+                ? ( isset( $r->row_index ) ? $r->row_index : null )
+                : ( $r['row_index'] ?? null );
+            if ( $idx !== null ) $indexes[] = (int) $idx;
+        }
+        $indexes = array_values( array_unique( $indexes ) );
+
+        $reopened = 0;
+
+        if ( ! empty( $indexes ) ) {
+            $ph     = implode( ',', array_fill( 0, count( $indexes ), '%d' ) );
+            $params = array_merge(
+                array( self::STATUS_QUEUED, $now, $import_id ),
+                $indexes,
+                array( self::STATUS_FAILED, self::STATUS_CANCELLED )
+            );
+
+            $reopened = (int) $wpdb->query( $wpdb->prepare(
+                "UPDATE {$t}
+                    SET status = %s,
+                        attempts = 0,
+                        locked_by = NULL,
+                        locked_until = NULL,
+                        error_code = NULL,
+                        error_message = NULL,
+                        updated_at = %s
+                  WHERE import_id = %s
+                    AND row_index IN ({$ph})
+                    AND status IN (%s, %s)",
+                $params
+            ) );
+
+            if ( $reopened > 0 ) {
+                WAB_Logger::info( sprintf( 'Re-opened %d previously failed/cancelled job(s) for %s.', $reopened, $import_id ) );
+            }
+        }
 
         $values = array();
         $params = array();
@@ -188,7 +259,8 @@ class WAB_Queue {
             );
         }
 
-        if ( empty( $values ) ) return 0;
+        // Nothing new to insert, but re-opened jobs still count as queued work.
+        if ( empty( $values ) ) return $reopened;
 
         $sql = "INSERT IGNORE INTO {$t}
                     (job_id, import_id, row_id, row_index, status, attempts, created_at, updated_at)
@@ -197,20 +269,76 @@ class WAB_Queue {
         $wpdb->query( $wpdb->prepare( $sql, $params ) );
 
         $inserted = (int) $wpdb->rows_affected;
+        $total    = $inserted + $reopened;
 
         // Surface the delta. A silent shortfall here is how 100 requested pages
         // become 1 generated page with no visible error.
         $requested = count( $rows );
-        if ( $skipped > 0 || $inserted < ( $requested - $skipped ) ) {
+        if ( $skipped > 0 || $total < ( $requested - $skipped ) ) {
             WAB_Logger::warn( sprintf(
-                'enqueue(): requested %d, malformed %d, newly queued %d (the remainder were already queued).',
+                'enqueue(): requested %d, malformed %d, newly inserted %d, re-opened %d. The remainder were already in flight or already done.',
                 $requested,
                 $skipped,
-                $inserted
+                $inserted,
+                $reopened
             ) );
         }
 
-        return $inserted;
+        return $total;
+    }
+
+    /**
+     * Why did a set of rows not get queued?
+     *
+     * enqueue() returning 0 is legitimate — every row may already be done or in
+     * flight — but "0 queued" with no explanation is indistinguishable from a broken
+     * button, which is exactly how the old INSERT IGNORE bug presented. This turns a
+     * zero into a sentence the operator can act on.
+     *
+     * @param string $import_id
+     * @param int[]  $row_indexes
+     * @return string Human-readable explanation, or '' when rows were queued.
+     */
+    public static function explain_no_op( $import_id, array $row_indexes ) {
+        global $wpdb;
+        if ( empty( $row_indexes ) ) {
+            return __( 'No rows were selected.', 'wonder-ai-builder' );
+        }
+
+        $t  = self::table();
+        $ph = implode( ',', array_fill( 0, count( $row_indexes ), '%d' ) );
+
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT status, COUNT(*) AS n FROM {$t}
+              WHERE import_id = %s AND row_index IN ({$ph})
+           GROUP BY status",
+            array_merge( array( $import_id ), array_map( 'intval', $row_indexes ) )
+        ) );
+
+        if ( empty( $rows ) ) return '';
+
+        $by = array();
+        foreach ( $rows as $r ) $by[ $r->status ] = (int) $r->n;
+
+        $parts = array();
+        if ( ! empty( $by[ self::STATUS_DONE ] ) ) {
+            $parts[] = sprintf(
+                /* translators: %d: count */
+                _n( '%d row has already been created', '%d rows have already been created', $by[ self::STATUS_DONE ], 'wonder-ai-builder' ),
+                $by[ self::STATUS_DONE ]
+            );
+        }
+        if ( ! empty( $by[ self::STATUS_PROCESSING ] ) ) {
+            $parts[] = sprintf( __( '%d is being generated right now', 'wonder-ai-builder' ), $by[ self::STATUS_PROCESSING ] );
+        }
+        if ( ! empty( $by['batched'] ) ) {
+            $parts[] = sprintf( __( '%d is waiting on an economy batch', 'wonder-ai-builder' ), $by['batched'] );
+        }
+        if ( ! empty( $by[ self::STATUS_QUEUED ] ) ) {
+            $parts[] = sprintf( __( '%d is already in the queue', 'wonder-ai-builder' ), $by[ self::STATUS_QUEUED ] );
+        }
+
+        return empty( $parts ) ? '' : ( implode( ', ', $parts ) . '.' );
     }
 
     // ---------------------------------------------------------------

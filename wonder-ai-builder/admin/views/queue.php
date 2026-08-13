@@ -64,9 +64,22 @@ $health = WAB_Runner::health();
         <?php endforeach; ?>
       </div>
       <div class="wab-filters">
-        <button class="button button-small" id="wab-run-now"><?php esc_html_e( 'Run now', 'wonder-ai-builder' ); ?></button>
+        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wab-inline-form">
+          <?php wp_nonce_field( 'wab_queue_action' ); ?>
+          <input type="hidden" name="action" value="wab_queue_action">
+          <input type="hidden" name="back" value="<?php echo esc_attr( WAB_Core::QUEUE_SLUG ); ?>">
+          <input type="hidden" name="do" value="run">
+          <button type="submit" class="button button-primary"><?php esc_html_e( 'Run the queue now', 'wonder-ai-builder' ); ?></button>
+        </form>
         <?php if ( current_user_can( WAB_Security::CAP_MANAGE ) ) : ?>
-          <button class="wab-chip wab-chip-danger" id="wab-drain"><?php esc_html_e( 'Cancel all waiting', 'wonder-ai-builder' ); ?></button>
+          <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wab-inline-form"
+                onsubmit="return confirm('<?php echo esc_js( __( 'Cancel every waiting job? Completed work is kept.', 'wonder-ai-builder' ) ); ?>');">
+            <?php wp_nonce_field( 'wab_queue_action' ); ?>
+            <input type="hidden" name="action" value="wab_queue_action">
+            <input type="hidden" name="back" value="<?php echo esc_attr( WAB_Core::QUEUE_SLUG ); ?>">
+            <input type="hidden" name="do" value="clear">
+            <button type="submit" class="button button-link-delete"><?php esc_html_e( 'Cancel all waiting', 'wonder-ai-builder' ); ?></button>
+          </form>
         <?php endif; ?>
       </div>
     </div>

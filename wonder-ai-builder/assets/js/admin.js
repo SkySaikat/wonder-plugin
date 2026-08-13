@@ -48,6 +48,17 @@
       if ( $( '#wab-jobs' ).length )    { this.bindQueue(); this.loadJobs(); this.startPolling(); }
       if ( $( '#wab-file' ).length )    { this.bindImport(); }
       if ( $( '#wab-settings-state' ).length ) { this.bindSettings(); }
+      if ( $( '#wab-selftest' ).length )       { this.bindSelfTest(); }
+
+      $( document ).on( 'click', '#wab-repair', function () {
+        var $b = $( this ).prop( 'disabled', true ).text( 'Repairing…' );
+        App.say( '#wab-repair-out', 'Running database migration…', 'info' );
+        App.post( 'wab_repair' ).done( function ( r ) {
+          if ( ! r || ! r.success ) { App.say( '#wab-repair-out', WAB.i18n.genericError, 'error' ); return; }
+          App.say( '#wab-repair-out', App.esc( r.data.message ), r.data.ok ? 'ok' : 'error' );
+          if ( r.data.ok ) { window.setTimeout( function () { location.reload(); }, 1200 ); }
+        } ).always( function () { $b.prop( 'disabled', false ).text( 'Repair database now' ); } );
+      } );
     },
 
     startPolling: function () {
@@ -366,6 +377,48 @@
       } );
 
       $( '#wab-mapper' ).html( h + '</div>' );
+    },
+
+    // ===========================================================
+    // System status — run the worker and report verbatim
+    // ===========================================================
+    bindSelfTest: function () {
+      $( '#wab-selftest' ).on( 'click', function () {
+        var $b = $( this ).prop( 'disabled', true ).text( 'Running…' );
+        App.say( '#wab-selftest-out', 'Asking the worker to run…', 'info' );
+
+        App.post( 'wab_run_now' ).done( function ( r ) {
+          if ( ! r || ! r.success ) { App.say( '#wab-selftest-out', WAB.i18n.genericError, 'error' ); return; }
+
+          var rep = r.data.report || {}, c = r.data.counts || {}, msg;
+
+          // Translate the runner's gate outcome into something actionable.
+          switch ( rep.status ) {
+            case 'ran':
+              msg = '<strong>Worker ran.</strong> Processed ' + ( rep.processed || 0 ) +
+                    ', succeeded ' + ( rep.succeeded || 0 ) + ', failed ' + ( rep.failed || 0 ) + '.';
+              if ( ! rep.processed ) { msg += ' It found nothing to claim — the queue is empty.'; }
+              break;
+            case 'idle':       msg = '<strong>Nothing to do.</strong> No rows are queued. Open a sheet, tick rows, press Generate.'; break;
+            case 'paused':     msg = '<strong>Queue is paused.</strong> Press Resume in the header.'; break;
+            case 'budget':     msg = '<strong>Daily budget reached.</strong> ' + App.esc( rep.message || '' ); break;
+            case 'locked':     msg = '<strong>Another worker is already running.</strong> That is expected if a run is in progress.'; break;
+            case 'high_load':  msg = '<strong>Server load too high</strong>, so the worker deferred. ' + App.esc( rep.message || '' ); break;
+            case 'low_memory': msg = '<strong>Not enough free PHP memory</strong> to start safely. ' + App.esc( rep.message || '' ); break;
+            case 'throttled':  msg = '<strong>Throttled</strong> — it ran moments ago. Wait 20 seconds and try again.'; break;
+            default:           msg = '<strong>' + App.esc( rep.status || 'unknown' ) + '</strong> ' + App.esc( rep.message || '' );
+          }
+
+          msg += '<br><span class="wab-muted">Queue now: ' + ( c.queued || 0 ) + ' waiting, ' +
+                 ( c.processing || 0 ) + ' running, ' + ( c.done || 0 ) + ' created, ' + ( c.failed || 0 ) + ' failed.</span>';
+
+          App.say( '#wab-selftest-out', msg, rep.status === 'ran' ? 'ok' : 'info' );
+        } ).fail( function () {
+          App.say( '#wab-selftest-out', 'The request itself failed — admin-ajax.php may be blocked.', 'error' );
+        } ).always( function () {
+          $b.prop( 'disabled', false ).text( 'Run one job now' );
+        } );
+      } );
     },
 
     // ===========================================================

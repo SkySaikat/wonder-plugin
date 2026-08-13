@@ -36,6 +36,24 @@ class WAB_Security {
      * @param string $capability Capability required. Defaults to full management.
      */
     public static function guard( $capability = self::CAP_MANAGE ) {
+        /**
+         * Stop wpdb from printing errors into an AJAX response body.
+         *
+         * This is a correctness fix, not cosmetics. With show_errors enabled — WP_DEBUG,
+         * or the default on many managed hosts — any database warning is echoed straight
+         * into the output stream. In an AJAX handler that lands *inside* the JSON, making
+         * it unparseable, so the browser sees no `success` flag and the screen silently
+         * renders nothing. A single missing table was enough to make the entire Queue
+         * page look permanently empty while the header still claimed everything was fine.
+         *
+         * Errors are still recorded in $wpdb->last_error and surfaced through
+         * System status, so nothing is hidden from diagnosis — only from the wire.
+         */
+        global $wpdb;
+        if ( isset( $wpdb ) && is_object( $wpdb ) ) {
+            $wpdb->hide_errors();
+        }
+
         // check_ajax_referer( $action, $query_arg, $die = true ) — dies on failure.
         check_ajax_referer( self::NONCE_ACTION, 'nonce' );
 

@@ -13,6 +13,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 $wab_spend  = WAB_Cost_Guard::summary();
 $wab_counts = WAB_Queue::counts();
 $wab_health = WAB_Runner::health();
+$wab_current = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
 ?>
 <div class="wrap wab">
 
@@ -28,15 +29,58 @@ $wab_health = WAB_Runner::health();
     </div>
 
     <div class="wab-head-actions">
-      <span class="wab-runstate <?php echo $wab_health['paused'] ? 'is-paused' : 'is-live'; ?>">
+      <?php
+      /**
+       * FOUR states, not two.
+       *
+       * This previously showed "Running" whenever the queue simply was not paused —
+       * which is not the same thing at all. An install with a broken cron entry and
+       * 100 rows waiting reported "Running" indefinitely while nothing happened.
+       * That single misleading word cost real debugging time, so the indicator now
+       * reflects observed activity and calls out the stalled case explicitly.
+       */
+      $wab_age  = $wab_health['last_tick_age'];
+      $wab_wait = (int) $wab_counts['queued'];
+      $wab_busy = (int) $wab_counts['processing'];
+
+      if ( $wab_health['paused'] ) {
+          $wab_state = array( 'is-paused', __( 'Paused', 'wonder-ai-builder' ), __( 'Queue is paused — nothing will be generated.', 'wonder-ai-builder' ) );
+      } elseif ( $wab_wait > 0 && ( $wab_age === null || $wab_age > 300 ) ) {
+          $wab_state = array( 'is-stalled', __( 'Stalled', 'wonder-ai-builder' ),
+              sprintf( __( '%d row(s) waiting but the worker is not running. Open System status.', 'wonder-ai-builder' ), $wab_wait ) );
+      } elseif ( $wab_busy > 0 ) {
+          $wab_state = array( 'is-working', __( 'Working', 'wonder-ai-builder' ),
+              sprintf( __( 'Generating %d row(s) right now.', 'wonder-ai-builder' ), $wab_busy ) );
+      } elseif ( $wab_wait > 0 ) {
+          $wab_state = array( 'is-working', __( 'Working', 'wonder-ai-builder' ),
+              sprintf( __( '%d row(s) queued, being worked through.', 'wonder-ai-builder' ), $wab_wait ) );
+      } else {
+          $wab_state = array( 'is-live', __( 'Idle', 'wonder-ai-builder' ), __( 'Nothing queued. Ready.', 'wonder-ai-builder' ) );
+      }
+      ?>
+      <span class="wab-runstate <?php echo esc_attr( $wab_state[0] ); ?>" title="<?php echo esc_attr( $wab_state[2] ); ?>">
         <span class="wab-dot"></span>
-        <?php echo $wab_health['paused'] ? esc_html__( 'Paused', 'wonder-ai-builder' ) : esc_html__( 'Running', 'wonder-ai-builder' ); ?>
+        <?php echo esc_html( $wab_state[1] ); ?>
       </span>
-      <?php if ( $wab_health['paused'] ) : ?>
-        <button class="button button-primary" id="wab-resume"><?php esc_html_e( 'Resume', 'wonder-ai-builder' ); ?></button>
-      <?php else : ?>
-        <button class="button" id="wab-pause"><?php esc_html_e( 'Pause', 'wonder-ai-builder' ); ?></button>
-      <?php endif; ?>
+      <?php
+      /**
+       * Real form, not an AJAX button. Also relabelled: the bare word "Pause" next to
+       * a status chip read as a LABEL, so operators clicked it believing it described
+       * the state, and silently paused their own queue three times.
+       */
+      ?>
+      <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wab-inline-form">
+        <?php wp_nonce_field( 'wab_queue_action' ); ?>
+        <input type="hidden" name="action" value="wab_queue_action">
+        <input type="hidden" name="back" value="<?php echo esc_attr( $wab_current ?: WAB_Core::QUEUE_SLUG ); ?>">
+        <?php if ( $wab_health['paused'] ) : ?>
+          <input type="hidden" name="do" value="resume">
+          <button type="submit" class="button button-primary"><?php esc_html_e( 'Resume generating', 'wonder-ai-builder' ); ?></button>
+        <?php else : ?>
+          <input type="hidden" name="do" value="pause">
+          <button type="submit" class="button"><?php esc_html_e( 'Stop generating', 'wonder-ai-builder' ); ?></button>
+        <?php endif; ?>
+      </form>
     </div>
   </header>
 
@@ -44,7 +88,6 @@ $wab_health = WAB_Runner::health();
        back button behaves the way people expect. -->
   <nav class="wab-nav">
     <?php
-    $wab_current = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
     $wab_busy    = (int) $wab_counts['queued'] + (int) $wab_counts['processing'];
 
     $wab_links = array(
@@ -52,6 +95,7 @@ $wab_health = WAB_Runner::health();
       array( WAB_Core::SHEETS_SLUG, __( 'Sheets', 'wonder-ai-builder' ),    null ),
       array( WAB_Core::QUEUE_SLUG,  __( 'Queue', 'wonder-ai-builder' ),     $wab_busy ?: null ),
       array( WAB_Core::IMPORT_SLUG, __( 'Import a sheet', 'wonder-ai-builder' ), null ),
+      array( WAB_Core::STATUS_SLUG, __( 'System status', 'wonder-ai-builder' ), null ),
     );
 
     if ( current_user_can( WAB_Security::CAP_MANAGE ) ) {
@@ -67,6 +111,8 @@ $wab_health = WAB_Runner::health();
       </a>
     <?php endforeach; ?>
   </nav>
+
+  <?php WAB_Actions::render_notice(); ?>
 
   <?php if ( ! empty( $wab_health['issues'] ) && $wab_current === WAB_Core::MENU_SLUG ) : ?>
     <div class="wab-alert wab-alert-warn">

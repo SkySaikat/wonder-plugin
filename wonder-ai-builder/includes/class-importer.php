@@ -82,6 +82,13 @@ class WAB_Importer {
             ? self::parse_csv( $file['tmp_name'] )
             : self::parse_xlsx( $file['tmp_name'] );
 
+        // The parsers only see the temp path (/tmp/phpXN2Lkg), so the real upload
+        // name has to be attached here. Without this, every sheet in the UI was
+        // labelled with PHP's temporary filename.
+        if ( is_array( $parsed ) ) {
+            $parsed['filename'] = sanitize_file_name( (string) $file['name'] );
+        }
+
         if ( is_wp_error( $parsed ) ) {
             wp_send_json_error( array( 'message' => $parsed->get_error_message() ) );
         }
@@ -313,11 +320,31 @@ class WAB_Importer {
 
         $queued = WAB_Queue::enqueue( $import_id, $rows );
 
+        // A zero is legitimate (everything already done or in flight) but must never
+        // look like a dead button. Say WHY.
+        if ( $queued === 0 ) {
+            $why = WAB_Queue::explain_no_op( $import_id, wp_list_pluck( $rows, 'row_index' ) );
+
+            wp_send_json_error( array(
+                'message' => $why !== ''
+                    ? sprintf( __( 'Nothing new to queue — %s', 'wonder-ai-builder' ), $why )
+                    : __( 'Nothing was queued. Check the log in Settings for details.', 'wonder-ai-builder' ),
+            ) );
+        }
+
+        // Nudge the worker so a Standard-mode run starts within seconds rather than
+        // waiting for the next cron tick. Goes through WAB_Runner::tick(), so it
+        // obeys the same lock, load and budget gates — it cannot create a second
+        // worker, and it is NOT a spawn: it runs inline and returns.
+        $kick = WAB_Runner::tick( array( 'source' => 'enqueue', 'max_jobs' => 1 ) );
+
         wp_send_json_success( array(
             'queued'    => $queued,
             'estimate'  => round( $projected, 4 ),
             'per_item'  => round( $per_item, 6 ),
+            'started'   => ( isset( $kick['status'] ) && $kick['status'] === 'ran' ),
             'message'   => sprintf(
+                /* translators: 1: job count, 2: cost */
                 __( '%1$d job(s) queued. Estimated cost $%2$.2f. Generation runs on the server — you can close this tab.', 'wonder-ai-builder' ),
                 $queued,
                 $projected

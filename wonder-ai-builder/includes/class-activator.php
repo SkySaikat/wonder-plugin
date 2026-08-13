@@ -91,7 +91,21 @@ class WAB_Activator {
     public static function maybe_upgrade() {
         if ( ! current_user_can( 'manage_options' ) ) return;
 
-        if ( get_option( 'wab_db_version' ) === self::DB_VERSION ) return;
+        // Self-heal a half-migrated install.
+        //
+        // Gating purely on the version option was wrong: if wab_db_version already
+        // said '3' but dbDelta had never actually run — plugin files updated in place,
+        // a failed migration, an interrupted activation — this returned immediately
+        // and NEVER repaired anything. The symptoms were brutal and looked unrelated:
+        // a missing wp_wab_batches table made WAB_Batch::summary() emit a DB error
+        // straight into the ajax_status JSON, which made the response unparseable, so
+        // the queue table rendered empty forever while the UI still claimed "Running".
+        // Meanwhile a missing `payload` column failed every job outright.
+        //
+        // So verify the actual schema, not the bookkeeping. Cheap: one cached probe.
+        if ( get_option( 'wab_db_version' ) === self::DB_VERSION && self::schema_is_intact() ) {
+            return;
+        }
 
         // Single-flight so two admins loading wp-admin together cannot both migrate.
         if ( ! WAB_Lock::acquire( 'wab_upgrade', 120 ) ) return;
@@ -106,6 +120,78 @@ class WAB_Activator {
         } finally {
             WAB_Lock::release( 'wab_upgrade' );
         }
+    }
+
+    /**
+     * Is the real schema present — every table AND every column the code needs?
+     *
+     * Result cached for an hour so this costs nothing on normal admin loads. The
+     * cache is cleared whenever a repair runs.
+     *
+     * @return bool
+     */
+    public static function schema_is_intact() {
+        $cached = get_transient( 'wab_schema_ok' );
+        if ( $cached === 'yes' ) return true;
+
+        $missing = self::find_missing();
+
+        if ( empty( $missing ) ) {
+            set_transient( 'wab_schema_ok', 'yes', HOUR_IN_SECONDS );
+            delete_option( 'wab_schema_error' );
+            return true;
+        }
+
+        update_option( 'wab_schema_error', $missing, false );
+        return false;
+    }
+
+    /**
+     * Enumerate missing tables and missing columns.
+     *
+     * Columns matter as much as tables: `payload` and `batch_id` were added in
+     * DB_VERSION 3, and code written against them fails hard on an older table even
+     * though the table itself exists.
+     *
+     * @return string[] Human-readable list of what is absent.
+     */
+    public static function find_missing() {
+        global $wpdb;
+
+        $missing = array();
+
+        $tables = array( 'wab_imports', 'wab_rows', 'wab_jobs', 'wab_concepts', 'wab_scan', 'wab_batches' );
+        $present = array();
+
+        foreach ( $tables as $t ) {
+            $full = $wpdb->prefix . $t;
+            if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $full ) ) === $full ) {
+                $present[] = $t;
+            } else {
+                $missing[] = $t . ' (table)';
+            }
+        }
+
+        // Columns the runtime depends on, per table.
+        $required_columns = array(
+            'wab_jobs' => array( 'payload', 'batch_id', 'attachment_id', 'locked_until', 'attempts', 'cost_usd' ),
+            'wab_rows' => array( 'schema_markup', 'schema_type', 'post_type', 'price' ),
+        );
+
+        foreach ( $required_columns as $table => $cols ) {
+            if ( ! in_array( $table, $present, true ) ) continue; // Table itself already reported.
+
+            $have = $wpdb->get_col( 'DESC ' . $wpdb->prefix . $table );
+            if ( ! is_array( $have ) ) continue;
+
+            foreach ( $cols as $c ) {
+                if ( ! in_array( $c, $have, true ) ) {
+                    $missing[] = $table . '.' . $c . ' (column)';
+                }
+            }
+        }
+
+        return $missing;
     }
 
     // ---------------------------------------------------------------
@@ -256,6 +342,9 @@ class WAB_Activator {
             if ( $found !== $full ) $missing[] = $full;
         }
 
+        // Invalidate the cached "schema is fine" probe so the next check re-tests.
+        delete_transient( 'wab_schema_ok' );
+
         if ( ! empty( $missing ) ) {
             update_option( 'wab_schema_error', $missing, false );
             if ( class_exists( 'WAB_Logger' ) ) {
@@ -263,6 +352,9 @@ class WAB_Activator {
             }
         } else {
             delete_option( 'wab_schema_error' );
+            if ( class_exists( 'WAB_Logger' ) ) {
+                WAB_Logger::info( 'Schema verified at version ' . self::DB_VERSION );
+            }
         }
     }
 

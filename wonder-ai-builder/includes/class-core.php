@@ -29,6 +29,7 @@ class WAB_Core {
     const IMPORT_SLUG   = 'wonder-ai-import';             // Upload a sheet
     const SHEETS_SLUG   = 'wonder-ai-sheets';             // Sheet list + single-sheet rows
     const QUEUE_SLUG    = 'wonder-ai-queue';              // Job queue
+    const STATUS_SLUG   = 'wonder-ai-status';             // Self-diagnosis
     const SETTINGS_SLUG = 'wonder-ai-builder-settings';   // Settings
 
     public function run() {
@@ -38,6 +39,11 @@ class WAB_Core {
 
         // --- Front-end schema output. -------------------------------
         WAB_Schema_Builder::register_output();
+
+        // Form-POST handlers. The primary actions (generate, delete, queue
+        // control) are server-side forms so they cannot be broken by a stale
+        // or failed admin.js.
+        WAB_Actions::register();
 
         // --- Admin. -------------------------------------------------
         add_action( 'admin_menu', array( $this, 'menu' ) );
@@ -67,6 +73,7 @@ class WAB_Core {
             'wab_resume'        => array( $this, 'ajax_resume' ),
             'wab_drain'         => array( $this, 'ajax_drain' ),
             'wab_run_now'       => array( $this, 'ajax_run_now' ),
+            'wab_repair'        => array( $this, 'ajax_repair' ),
             'wab_preview_image' => array( $this, 'ajax_preview_image' ),
 
             // Admin-only.
@@ -106,6 +113,7 @@ class WAB_Core {
             array( self::SHEETS_SLUG, __( 'Sheets', 'wonder-ai-builder' ),       $gen,    'render_sheets' ),
             array( self::QUEUE_SLUG,  __( 'Queue', 'wonder-ai-builder' ),        $gen,    'render_queue' ),
             array( self::IMPORT_SLUG, __( 'Import a sheet', 'wonder-ai-builder' ), $gen,  'render_import' ),
+            array( self::STATUS_SLUG, __( 'System status', 'wonder-ai-builder' ), $gen,  'render_status' ),
             array( self::SETTINGS_SLUG, __( 'Settings', 'wonder-ai-builder' ),   $manage, 'render_settings' ),
         );
 
@@ -127,8 +135,28 @@ class WAB_Core {
         // unstyled with no working buttons.
         if ( strpos( (string) $hook, 'wonder-ai' ) === false ) return;
 
-        wp_enqueue_style( 'wab-admin', WAB_PLUGIN_URL . 'assets/css/admin.css', array(), WAB_VERSION );
-        wp_enqueue_script( 'wab-admin', WAB_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), WAB_VERSION, true );
+        /**
+         * Version assets by FILE MODIFICATION TIME, not the plugin version.
+         *
+         * This was a serious bug. Passing the static WAB_VERSION constant meant the
+         * URL never changed when the CSS or JS did, so browsers and host-level page
+         * caches (SiteGround, Cloudflare, WP Rocket...) served stale assets
+         * indefinitely. The visible result was brutal and misleading: unstyled
+         * navigation, panels rendered with an old dark-mode rule, and — worst —
+         * cached JavaScript whose selectors no longer matched the DOM, which left the
+         * Generate button permanently disabled. The plugin looked broken when only
+         * the asset URLs were.
+         *
+         * filemtime() changes on every edit, so a deploy always invalidates.
+         */
+        $css_path = WAB_PLUGIN_DIR . 'assets/css/admin.css';
+        $js_path  = WAB_PLUGIN_DIR . 'assets/js/admin.js';
+
+        $css_ver = file_exists( $css_path ) ? (string) filemtime( $css_path ) : WAB_VERSION;
+        $js_ver  = file_exists( $js_path )  ? (string) filemtime( $js_path )  : WAB_VERSION;
+
+        wp_enqueue_style( 'wab-admin', WAB_PLUGIN_URL . 'assets/css/admin.css', array(), $css_ver );
+        wp_enqueue_script( 'wab-admin', WAB_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), $js_ver, true );
 
         wp_localize_script( 'wab-admin', 'WAB', array(
             'ajax'  => admin_url( 'admin-ajax.php' ),
@@ -303,6 +331,36 @@ class WAB_Core {
         wp_send_json_success( array( 'deleted' => true ) );
     }
 
+    /**
+     * Force a schema re-check and repair. Safe to run repeatedly: dbDelta only
+     * applies differences, and existing rows are untouched.
+     */
+    public function ajax_repair() {
+        WAB_Security::guard( WAB_Security::CAP_MANAGE );
+
+        $before = WAB_Activator::find_missing();
+
+        delete_transient( 'wab_schema_ok' );
+        delete_transient( 'wab_batches_ok' );
+
+        WAB_Activator::activate();   // dbDelta + option seeding + re-schedule cron.
+
+        $after = WAB_Activator::find_missing();
+
+        wp_send_json_success( array(
+            'repaired' => array_values( array_diff( $before, $after ) ),
+            'missing'  => $after,
+            'ok'       => empty( $after ),
+            'message'  => empty( $after )
+                ? __( 'Database verified. Everything the plugin needs is present.', 'wonder-ai-builder' )
+                : sprintf(
+                    /* translators: %s: list */
+                    __( 'Still missing after repair: %s. The database user may lack ALTER/CREATE permission.', 'wonder-ai-builder' ),
+                    implode( ', ', $after )
+                ),
+        ) );
+    }
+
     public function ajax_retry() {
         WAB_Security::guard( WAB_Security::CAP_GENERATE );
         $id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
@@ -403,6 +461,7 @@ class WAB_Core {
     public function render_dashboard() { $this->view( 'dashboard', WAB_Security::CAP_GENERATE ); }
     public function render_import()    { $this->view( 'import',    WAB_Security::CAP_GENERATE ); }
     public function render_queue()     { $this->view( 'queue',     WAB_Security::CAP_GENERATE ); }
+    public function render_status()    { $this->view( 'status',    WAB_Security::CAP_GENERATE ); }
     public function render_settings()  { $this->view( 'settings',  WAB_Security::CAP_MANAGE ); }
 
     /**

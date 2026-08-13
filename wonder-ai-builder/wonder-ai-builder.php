@@ -66,6 +66,8 @@ final class WAB_Bootstrap {
         'includes/class-generator.php',
 
         // Admin
+        'includes/class-diagnostics.php',
+        'includes/class-actions.php',
         'includes/class-core.php',
     );
 

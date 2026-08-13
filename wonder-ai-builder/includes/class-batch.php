@@ -82,6 +82,38 @@ class WAB_Batch {
         return $wpdb->prefix . 'wab_batches';
     }
 
+    /**
+     * Does the batch table actually exist?
+     *
+     * Guarding every read here is not paranoia — it fixed a real, badly-disguised
+     * failure. On an install whose schema had not been migrated to DB_VERSION 3,
+     * wp_wab_batches was absent, so summary() raised a wpdb error. With
+     * show_errors on (WP_DEBUG, or many managed hosts) that error text was printed
+     * INTO the ajax_status response, making the JSON unparseable. The JS then saw
+     * no `success` flag and returned silently, so the Queue screen sat empty while
+     * the header still reported "Running". The visible symptom — "no data in the
+     * queue" — was three layers away from the actual cause.
+     *
+     * Cached per request; the transient is cleared whenever the schema is repaired.
+     */
+    private static function table_exists() {
+        static $exists = null;
+        if ( $exists !== null ) return $exists;
+
+        if ( get_transient( 'wab_batches_ok' ) === 'yes' ) {
+            $exists = true;
+            return true;
+        }
+
+        global $wpdb;
+        $t      = self::table();
+        $exists = ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $t ) ) === $t );
+
+        if ( $exists ) set_transient( 'wab_batches_ok', 'yes', HOUR_IN_SECONDS );
+
+        return $exists;
+    }
+
     public static function enabled() {
         return get_option( 'wab_generation_mode', 'standard' ) === 'economy';
     }
@@ -481,6 +513,8 @@ class WAB_Batch {
      * failure mode that made has_pending() consider expired leases.
      */
     public static function has_open() {
+        if ( ! self::table_exists() ) return false;
+
         global $wpdb;
         $t = self::table();
 
@@ -492,6 +526,20 @@ class WAB_Batch {
     }
 
     public static function summary() {
+        // Never query a table that may not exist — a wpdb error here corrupts the
+        // JSON of whatever AJAX response is being built.
+        if ( ! self::table_exists() ) {
+            return array(
+                'enabled'     => self::enabled(),
+                'available'   => false,
+                'reason'      => __( 'Batch table missing — visit System status to repair the database.', 'wonder-ai-builder' ),
+                'open'        => array(),
+                'in_flight'   => 0,
+                'ready_local' => 0,
+                'batch_spend' => 0.0,
+            );
+        }
+
         global $wpdb;
 
         $t = self::table();

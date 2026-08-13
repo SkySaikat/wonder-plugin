@@ -68,9 +68,21 @@ $imports = $wpdb->get_results(
 
           <footer>
             <span class="wab-muted"><?php echo esc_html( mysql2date( get_option( 'date_format' ), $imp->created_at ) ); ?></span>
-            <a class="button button-small button-primary" href="<?php echo esc_url( $url ); ?>">
-              <?php esc_html_e( 'Open rows', 'wonder-ai-builder' ); ?>
-            </a>
+            <span class="wab-cardactions">
+              <a class="button button-small button-primary" href="<?php echo esc_url( $url ); ?>">
+                <?php esc_html_e( 'Open rows', 'wonder-ai-builder' ); ?>
+              </a>
+              <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
+                    class="wab-inline-form"
+                    onsubmit="return confirm('<?php echo esc_js( __( 'Delete this sheet? Pages already created will be kept.', 'wonder-ai-builder' ) ); ?>');">
+                <?php wp_nonce_field( 'wab_delete_sheet' ); ?>
+                <input type="hidden" name="action" value="wab_delete_sheet">
+                <input type="hidden" name="import_id" value="<?php echo esc_attr( $imp->import_id ); ?>">
+                <button type="submit" class="button-link wab-del" title="<?php esc_attr_e( 'Delete sheet', 'wonder-ai-builder' ); ?>">
+                  <?php esc_html_e( 'Delete', 'wonder-ai-builder' ); ?>
+                </button>
+              </form>
+            </span>
           </footer>
         </article>
       <?php endforeach; ?>

@@ -122,11 +122,16 @@ textarea.wab-input { font-family:inherit; }
 .wab-log-error span { color:#b32d2e; }
 .wab-log-warn  span { color:#8a6d00; }
 
-@media (prefers-color-scheme: dark) {
-  .wab { --wab-bg:#1e1e1e; --wab-line:#3c434a; --wab-muted:#a7aaad; }
-  .wab-alert pre, .wab-mapper { background:#2c3338; }
-  .wab-table tbody tr:hover { background:#2c3338; }
-}
+/* NO prefers-color-scheme BLOCK — DELIBERATELY REMOVED.
+ *
+ * An earlier version restyled these panels dark when the OPERATING SYSTEM was in
+ * dark mode. WordPress admin has no dark mode: its text colour stays #1d2327
+ * regardless. The result was dark text on a #1e1e1e card — invisible content on
+ * every macOS/Windows machine with dark mode enabled.
+ *
+ * These panels now always use light surfaces that match core wp-admin. If a real
+ * dark admin scheme is wanted later it must set foreground AND background together,
+ * keyed off WordPress's own admin colour scheme, never off the OS. */
 
 /* =========================================================
    Multi-page layout (added when the UI moved from one page
@@ -237,3 +242,61 @@ textarea.wab-input { font-family:inherit; }
 .wab-note-inline{font-size:12.5px;color:var(--wab-muted);margin:0 0 14px;
   padding:9px 13px;background:var(--wab-bg-2,#f6f7f7);border-radius:7px}
 .wab-empty{text-align:center;color:var(--wab-muted);padding:30px 16px;margin:0}
+
+/* System status checks */
+.wab-banner{margin:0 0 18px}
+.wab-checks{list-style:none;margin:0;padding:0}
+.wab-checks li{display:flex;gap:12px;padding:13px 0;border-bottom:1px solid var(--wab-line)}
+.wab-checks li:last-child{border-bottom:0}
+.wab-checks strong{display:block;font-size:13.5px}
+.wab-checks p{margin:2px 0 0;font-size:12.5px;color:var(--wab-muted)}
+.wab-check-fix{color:#8a6d00 !important}
+.wab-check-icon{flex:0 0 22px;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+  font-size:12px;font-weight:700;color:#fff;margin-top:1px}
+.wab-check-pass .wab-check-icon{background:#00a32a}
+.wab-check-warn .wab-check-icon{background:#dba617}
+.wab-check-fail .wab-check-icon{background:#d63638}
+.wab-copy{position:relative;font-size:12px}
+
+/* Explicit foregrounds. Never rely on inheritance for legibility. */
+.wab, .wab-card, .wab-stat, .wab-sheetcard, .wab-selbar, .wab-do,
+.wab-dropzone, .wab-alert, .wab-table td, .wab-table th { color:#1d2327; }
+.wab-card, .wab-stat, .wab-sheetcard, .wab-selbar, .wab-do,
+.wab-dropzone, .wab-alert { background:#fff; }
+.wab-mapper, .wab-alert pre, .wab-note-inline { background:#f6f7f7; color:#1d2327; }
+.wab-table tbody tr:hover { background:#f6f7f7; }
+.wab-input, .wab select, .wab input[type=text], .wab input[type=number],
+.wab input[type=password], .wab textarea { color:#1d2327; background:#fff; }
+
+/* Run-state dots — four states, each visually distinct */
+.wab-runstate.is-working .wab-dot{background:#2271b1;box-shadow:0 0 0 3px rgba(34,113,177,.18);
+  animation:wab-pulse 1.4s ease-in-out infinite}
+.wab-runstate.is-stalled{border-color:#d63638;color:#b32d2e}
+.wab-runstate.is-stalled .wab-dot{background:#d63638;box-shadow:0 0 0 3px rgba(214,54,56,.18)}
+@keyframes wab-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* Repair alarm card */
+.wab-card-alarm{border-left:4px solid #d63638}
+.wab-missing{margin:8px 0 14px 18px;font-size:12.5px}
+.wab-missing code{font-size:12px}
+
+/* Summary strip */
+.wab-summary{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:12px 16px;margin:0 0 14px;
+  background:#fff;border:1px solid #dcdcde;border-radius:10px;font-size:13px;color:#1d2327}
+.wab-summary strong{font-size:17px;font-weight:600}
+.wab-summary-cost{margin-left:auto;color:#646970}
+
+/* One-click bulk bar */
+.wab-bulkbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px;margin:0 0 16px;
+  background:#f0f6fc;border:1px solid #a7c7e7;border-left:4px solid #2271b1;border-radius:10px;color:#1d2327}
+.wab-bulkbar-text{display:flex;flex-direction:column;gap:2px;margin-right:auto}
+.wab-bulkbar-text strong{font-size:14px}
+
+.wab-inline-form{display:inline-block;margin:0}
+.wab-cardactions{display:inline-flex;align-items:center;gap:10px}
+.wab-del{color:#b32d2e!important;text-decoration:none}
+.wab-del:hover{text-decoration:underline}
+
+/* Row table uses core wp-list-table styling; only additions here. */
+.wab-rowtable .wab-row-locked{opacity:.6}
+.wab-rowtable .check-column .dashicons-lock{color:#8c8f94;margin-top:4px}
